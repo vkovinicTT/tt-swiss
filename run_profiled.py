@@ -14,16 +14,19 @@ Modes:
 
 Usage:
     # Default: Full profiling with visualization
-    python memory_profiler/run_profiled.py path/to/your_model.py
+    tt-memory-profiler path/to/your_model.py
 
     # Only capture logs
-    python memory_profiler/run_profiled.py --log path/to/your_model.py
+    tt-memory-profiler --log path/to/your_model.py
 
     # Analyze existing log
-    python memory_profiler/run_profiled.py --analyze memory_profiler/logs/your_model_20260122_143957/your_model_profile.log
+    tt-memory-profiler --analyze logs/your_model_20260122_143957/your_model_profile.log
 
     # Visualize existing run
-    python memory_profiler/run_profiled.py --visualize memory_profiler/logs/your_model_20260122_143957/
+    tt-memory-profiler --visualize logs/your_model_20260122_143957/
+
+    # Specify custom output directory
+    tt-memory-profiler --output-dir /path/to/output path/to/your_model.py
 """
 
 import argparse
@@ -145,16 +148,19 @@ def main():
         epilog="""
 Examples:
   # Default: run + parse + visualize
-  python memory_profiler/run_profiled.py path/to/your_model.py
+  tt-memory-profiler path/to/your_model.py
 
   # Only capture logs
-  python memory_profiler/run_profiled.py --log path/to/your_model.py
+  tt-memory-profiler --log path/to/your_model.py
 
   # Analyze existing log
-  python memory_profiler/run_profiled.py --analyze memory_profiler/logs/your_model_20260122_143957/your_model_profile.log
+  tt-memory-profiler --analyze logs/your_model_20260122_143957/your_model_profile.log
 
   # Visualize existing run
-  python memory_profiler/run_profiled.py --visualize memory_profiler/logs/your_model_20260122_143957/
+  tt-memory-profiler --visualize logs/your_model_20260122_143957/
+
+  # Specify custom output directory
+  tt-memory-profiler --output-dir /path/to/output path/to/your_model.py
         """,
     )
 
@@ -175,6 +181,11 @@ Examples:
         "--visualize",
         metavar="RUN_DIR",
         help="Generate visualization from existing run directory",
+    )
+    parser.add_argument(
+        "--output-dir",
+        metavar="DIR",
+        help="Output directory for logs (default: ./logs in current working directory)",
     )
 
     args = parser.parse_args()
@@ -219,8 +230,12 @@ Examples:
         script_name = target_script.stem
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        profiler_dir = Path(__file__).parent
-        output_dir = profiler_dir / "logs" / f"{script_name}_{timestamp}"
+        # Use --output-dir if specified, otherwise use ./logs in current working directory
+        if args.output_dir:
+            base_dir = Path(args.output_dir)
+        else:
+            base_dir = Path.cwd() / "logs"
+        output_dir = base_dir / f"{script_name}_{timestamp}"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Run and capture logs
@@ -236,9 +251,9 @@ Examples:
             print("=" * 70)
             print(f"\nLog file: {log_file}")
             print(f"\nTo analyze later, run:")
-            print(f"  python run_profiled.py --analyze {log_file}")
+            print(f"  tt-memory-profiler --analyze {log_file}")
             print(f"\nTo visualize later, run:")
-            print(f"  python run_profiled.py --visualize {output_dir}")
+            print(f"  tt-memory-profiler --visualize {output_dir}")
             return
 
         # Default: parse and visualize
