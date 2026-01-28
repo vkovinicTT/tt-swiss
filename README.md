@@ -6,10 +6,10 @@ Memory profiler for Tenstorrent hardware - extracts per-op memory stats and gene
 
 ```bash
 # Install from GitHub
-pip install git+https://github.com/yourusername/tt-memory-profiler.git
+pip install git+https://github.com/vkovinicTT/memory_profiler.git
 
 # Or install locally for development
-pip install -e /path/to/tt-memory-profiler
+pip install -e /path/to/memory_profiler
 ```
 
 ## Prerequisites (TT-XLA Setup)
@@ -74,7 +74,6 @@ Output is stored in `./logs/` relative to your current working directory (or `--
 ## View Visualization
 
 Right-click on the HTML file and choose "Open with Live Server" (requires the Live Server extension in VS Code).
-```
 
 ## Features
 
