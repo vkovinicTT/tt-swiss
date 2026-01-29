@@ -23,11 +23,24 @@ try:
     from rich.panel import Panel
     from rich.spinner import Spinner
     from rich.live import Live
-    import questionary
+    from InquirerPy import inquirer
+    from InquirerPy.base.control import Choice
+    from InquirerPy.utils import InquirerPyStyle
 except ImportError:
     print("Error: Required packages not found. Please install with:")
-    print("  pip install rich questionary")
+    print("  pip install rich InquirerPy")
     sys.exit(1)
+
+# Custom style for InquirerPy prompts (cyan/blue theme matching the logo)
+CUSTOM_STYLE = InquirerPyStyle({
+    "questionmark": "fg:cyan bold",
+    "question": "bold",
+    "answer": "fg:cyan bold",
+    "pointer": "fg:cyan bold",
+    "highlighted": "fg:cyan bold",
+    "selected": "fg:cyan",
+    "instruction": "fg:gray",
+})
 
 # Handle both package import and direct execution
 try:
@@ -91,31 +104,65 @@ def display_instructions() -> None:
     )
 
 
-def ask_has_log_file() -> bool:
-    """Ask the user if they already have a log file."""
-    return questionary.confirm(
-        "Have you generated the log file with memory logs?",
-        default=False,
-    ).ask()
+def ask_has_log_file() -> Optional[str]:
+    """Ask the user if they already have a log file.
+
+    Returns:
+        'yes' - User has a log file ready
+        'do_it_for_me' - User wants automated log generation
+        'instructions' - User wants step-by-step instructions
+        None - User cancelled (Q pressed)
+    """
+    return inquirer.select(
+        message="Do you have a log file with memory logs ready?",
+        choices=[
+            Choice(value="yes", name="Yes, I have a log file with memory logs ready."),
+            Choice(value="do_it_for_me", name="No, do it for me."),
+            Choice(value="instructions", name="No, give me step-by-step so I can do it myself."),
+        ],
+        instruction="(Arrow keys to navigate, Enter to select, Q to quit)",
+        style=CUSTOM_STYLE,
+        mandatory=False,
+        keybindings={"skip": [{"key": "q"}, {"key": "Q"}]},
+    ).execute()
 
 
 def wait_for_ready() -> None:
     """Wait for the user to press Enter when ready."""
     console.print()
-    questionary.press_any_key_to_continue(
-        "Press Enter when you have your log file ready..."
-    ).ask()
+    input("Press Enter when you have your log file ready...")
+
+
+def do_it_for_me_placeholder() -> None:
+    """Placeholder for automated log generation feature."""
+    console.print()
+    console.print(
+        Panel(
+            "[bold yellow]Feature Coming Soon![/bold yellow]\n\n"
+            "Automated log generation is not yet implemented.\n"
+            "This feature will automatically run your model script\n"
+            "with the correct environment settings and generate logs.",
+            title="[bold]Do It For Me[/bold]",
+            border_style="yellow",
+            padding=(1, 2),
+        )
+    )
+    console.print()
+    input("Press Enter to return to the main menu...")
 
 
 def ask_log_file_path() -> Optional[str]:
     """Prompt the user for the log file path with autocomplete."""
     console.print()
-    path = questionary.path(
-        "Enter the path to your log file:",
-        only_directories=False,
-        validate=lambda p: validate_log_path(p) is None or validate_log_path(p),
-    ).ask()
-    return path
+    console.print("[dim]Q to go back[/dim]")
+    return inquirer.filepath(
+        message="Enter the path to your log file:",
+        validate=lambda p: validate_log_path(p) is None,
+        invalid_message="Invalid path. File must exist and be readable.",
+        style=CUSTOM_STYLE,
+        mandatory=False,
+        keybindings={"skip": [{"key": "q"}, {"key": "Q"}]},
+    ).execute()
 
 
 def validate_log_path(path: str) -> Optional[str]:
@@ -235,12 +282,16 @@ def start_http_server(directory: Path, port: int) -> Tuple[socketserver.TCPServe
     return server, thread
 
 
-def ask_serve_http() -> bool:
+def ask_serve_http() -> Optional[bool]:
     """Ask the user if they want to serve the report via HTTP."""
-    return questionary.confirm(
-        "Serve report via HTTP? (useful for remote access)",
+    console.print("[dim]Q to skip[/dim]")
+    return inquirer.confirm(
+        message="Serve report via HTTP? (useful for remote access)",
         default=True,
-    ).ask()
+        style=CUSTOM_STYLE,
+        mandatory=False,
+        keybindings={"skip": [{"key": "q"}, {"key": "Q"}]},
+    ).execute()
 
 
 def display_success(report_path: Path, serve_http: bool = False) -> Optional[socketserver.TCPServer]:
@@ -302,28 +353,39 @@ def main() -> int:
         # Display intro
         display_intro()
 
-        # Ask if user has a log file
-        has_log = ask_has_log_file()
+        # Main menu loop
+        while True:
+            # Ask if user has a log file
+            choice = ask_has_log_file()
 
-        if has_log is None:
-            # User cancelled (Ctrl+C)
-            console.print("\n[yellow]Cancelled.[/yellow]")
-            return 1
+            if choice is None:
+                # User pressed Esc - quit
+                console.print("\n[yellow]Goodbye![/yellow]")
+                return 0
 
-        if not has_log:
-            # Show instructions and wait for user
-            display_instructions()
-            wait_for_ready()
+            if choice == "do_it_for_me":
+                # Show placeholder and return to main menu
+                do_it_for_me_placeholder()
+                continue
 
-        # Get log file path
-        log_path = ask_log_file_path()
+            if choice == "instructions":
+                # Show instructions and wait for user
+                display_instructions()
+                wait_for_ready()
 
-        if log_path is None:
-            # User cancelled
-            console.print("\n[yellow]Cancelled.[/yellow]")
-            return 1
+            # choice is 'yes' or 'instructions' (after waiting)
+            # Get log file path
+            log_path = ask_log_file_path()
 
-        # Validate path (questionary already validated, but double-check)
+            if log_path is None:
+                # User pressed Esc - go back to main menu
+                console.print("\n[dim]Returning to main menu...[/dim]\n")
+                continue
+
+            # Valid path provided, exit the loop
+            break
+
+        # Validate path (InquirerPy already validated, but double-check)
         error = validate_log_path(log_path)
         if error:
             console.print(f"[red]{error}[/red]")
