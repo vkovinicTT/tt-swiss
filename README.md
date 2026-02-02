@@ -1,8 +1,13 @@
-# TT Memory Profiler
+# TT Swiss - A swiss knife for model bringup 🇨🇭
 
-Memory profiler for Tenstorrent hardware - extracts per-op memory stats and generates interactive visualizations.
+This repo is a collection of all of the useful tools for enabling models to work on TT hardware. This includes:
+1. Memory profiler `ttmem` - useful for look at memory usage of the model. Signs that you need this - errors like `Out of Memory: Not enough space to allocate <nbytes> B DRAM buffer across <nbanks> banks` 
 
-## Installation
+2. Claude skills and commands - We recommend you copy paste these in your `~/.claude` or `<tt-xla-path>/.claude` for easier debugging of models.
+
+## Memory profiler
+
+### Quick start
 
 ```bash
 # Install from GitHub
@@ -12,11 +17,11 @@ pip install git+https://github.com/vkovinicTT/tt-swiss.git
 pip install -e /path/to/tt-swiss
 ```
 
-## Prerequisites (TT-XLA Setup)
+### Prerequisites (TT-XLA Setup)
 
 Before using the profiler, you need to configure TT-XLA for memory logging:
 
-### 1. Build the project with debug flags
+#### 1. Build the project with debug flags
 
 ```bash
 source venv/activate
@@ -26,16 +31,16 @@ cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Debug -DTT_RUNTIME_DEBUG=ON
 cmake --build build
 ```
 
-### 2. Export runtime logger flag (for op and memory info)
+#### 2. Export runtime logger flag (for op and memory info)
 
 ```bash
 export TTMLIR_RUNTIME_LOGGER_LEVEL=DEBUG
 export TT_RUNTIME_MEMORY_LOG_LEVEL=operation
 ```
 
-## Usage
+### Usage
 
-### Interactive CLI (Recommended for Remote Development)
+#### Interactive CLI (Recommended for Remote Development)
 
 ```bash
 ttmem
@@ -49,7 +54,7 @@ The interactive CLI guides you through the process with prompts:
 
 When working on a remote machine via VS Code Remote SSH, the HTTP server option allows you to view the report in your local browser. VS Code automatically forwards the port, so `http://localhost:8000/report.html` will work from your local machine.
 
-### Command Line Interface
+#### Command Line Interface
 
 ```bash
 # Default: run + parse + visualize (recommended)
@@ -68,7 +73,7 @@ tt-memory-profiler --visualize logs/your_model_20260122_143957/
 tt-memory-profiler --output-dir /path/to/output path/to/your_model.py
 ```
 
-## Output Structure
+### Output Structure
 
 Output is stored in `./logs/` relative to your current working directory (or `--output-dir` if specified):
 
@@ -80,7 +85,7 @@ Output is stored in `./logs/` relative to your current working directory (or `--
 └── <script_name>_report.html      # Interactive visualization
 ```
 
-## View Visualization
+### View Visualization
 
 **Option 1: Using `ttmem` (recommended for remote development)**
 - Run `ttmem`, select "Yes" when asked to serve via HTTP
@@ -98,7 +103,7 @@ python -m http.server 8000
 # Open http://localhost:8000/your_model_report.html
 ```
 
-## Features
+### Features
 
 - Interactive HTML visualization with memory graphs, fragmentation analysis, peak operations
 - Synchronized JSON outputs (nth element = same operation)
