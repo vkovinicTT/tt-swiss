@@ -6,10 +6,10 @@ Memory profiler for Tenstorrent hardware - extracts per-op memory stats and gene
 
 ```bash
 # Install from GitHub
-pip install git+https://github.com/vkovinicTT/memory_profiler.git
+pip install git+https://github.com/vkovinicTT/tt_swiss.git
 
 # Or install locally for development
-pip install -e /path/to/memory_profiler
+pip install -e /path/to/tt_swiss
 ```
 
 ## Prerequisites (TT-XLA Setup)
