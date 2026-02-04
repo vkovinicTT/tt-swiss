@@ -113,6 +113,7 @@ def ask_has_log_file() -> Optional[str]:
         'yes' - User has a log file ready
         'do_it_for_me' - User wants automated log generation
         'instructions' - User wants step-by-step instructions
+        'browse' - User wants to browse existing reports
         None - User cancelled (Q pressed)
     """
     return inquirer.select(
@@ -121,6 +122,7 @@ def ask_has_log_file() -> Optional[str]:
             Choice(value="yes", name="Yes, I have a log file with memory logs ready."),
             Choice(value="do_it_for_me", name="No, do it for me."),
             Choice(value="instructions", name="No, give me step-by-step so I can do it myself."),
+            Choice(value="browse", name="Browse existing reports"),
         ],
         instruction="(Arrow keys to navigate, Enter to select, Q to quit)",
         style=CUSTOM_STYLE,
@@ -283,57 +285,106 @@ def start_http_server(directory: Path, port: int) -> Tuple[socketserver.TCPServe
     return server, thread
 
 
-def ask_serve_http() -> Optional[bool]:
-    """Ask the user if they want to serve the report via HTTP."""
-    console.print("[dim]Q to skip[/dim]")
-    return inquirer.confirm(
-        message="Serve report via HTTP? (useful for remote access)",
-        default=True,
+def browse_existing_reports() -> None:
+    """Browse and serve existing reports from ~/.ttmem/reports/."""
+    reports_dir = get_reports_dir()
+
+    if not reports_dir.exists():
+        console.print(
+            Panel(
+                "[yellow]No reports directory found.[/yellow]\n\n"
+                "Process a log file first to generate reports.",
+                title="[bold]No Reports[/bold]",
+                border_style="yellow",
+                padding=(1, 2),
+            )
+        )
+        console.print()
+        input("Press Enter to return to the main menu...")
+        return
+
+    # Find all report directories that contain HTML files
+    report_dirs = []
+    for item in sorted(reports_dir.iterdir()):
+        if item.is_dir():
+            html_files = list(item.glob("*.html"))
+            if html_files:
+                report_dirs.append((item.name, html_files[0]))
+
+    if not report_dirs:
+        console.print(
+            Panel(
+                "[yellow]No reports found in ~/.ttmem/reports/[/yellow]\n\n"
+                "Process a log file first to generate reports.",
+                title="[bold]No Reports[/bold]",
+                border_style="yellow",
+                padding=(1, 2),
+            )
+        )
+        console.print()
+        input("Press Enter to return to the main menu...")
+        return
+
+    # Create choices for the selection
+    choices = [Choice(value=html_path, name=name) for name, html_path in report_dirs]
+
+    console.print()
+    console.print("[dim]Q to go back[/dim]")
+    selected = inquirer.select(
+        message="Select a report to view:",
+        choices=choices,
+        instruction="(Arrow keys to navigate, Enter to select, Q to go back)",
         style=CUSTOM_STYLE,
         mandatory=False,
         keybindings={"skip": [{"key": "q"}, {"key": "Q"}]},
     ).execute()
 
+    if selected is None:
+        return
 
-def display_success(report_path: Path, serve_http: bool = False) -> Optional[socketserver.TCPServer]:
+    # Serve the selected report
+    report_path = Path(selected)
+    server = display_success(report_path)
+
+    # If server is running, wait for Ctrl+C
+    if server:
+        try:
+            console.print("\n[dim]Press Ctrl+C to stop the server and return to menu.[/dim]")
+            while True:
+                pass
+        except KeyboardInterrupt:
+            server.shutdown()
+            console.print("\n[yellow]Server stopped.[/yellow]\n")
+
+
+def display_success(report_path: Path) -> Optional[socketserver.TCPServer]:
     """
-    Display success message with clickable link to the report.
+    Display success message with HTTP URL for the report.
 
-    If serve_http is True, starts an HTTP server and returns the server instance.
+    Always starts an HTTP server and returns the server instance.
     """
-    # Create file:// URL
-    file_url = f"file://{report_path.absolute()}"
+    server = None
+    try:
+        port = find_available_port()
+        server, _ = start_http_server(report_path.parent, port)
+        # Use localhost since VS Code Remote SSH will auto-forward the port
+        http_url = f"http://localhost:{port}/{report_path.name}"
 
-    success_message = f"""
+        success_message = f"""
 [bold green]Report generated successfully![/bold green]
 
-[bold]Report location:[/bold]
-[link={file_url}]{report_path}[/link]
-"""
-
-    server = None
-    if serve_http:
-        try:
-            port = find_available_port()
-            server, _ = start_http_server(report_path.parent, port)
-            # Use localhost since VS Code Remote SSH will auto-forward the port
-            http_url = f"http://localhost:{port}/{report_path.name}"
-
-            success_message += f"""
-[bold]HTTP URL (VS Code will auto-forward port {port}):[/bold]
+[bold]Open in browser:[/bold]
 [link={http_url}]{http_url}[/link]
 
 [dim]Server running on port {port}. Press Ctrl+C to stop.[/dim]
 """
-        except Exception as e:
-            success_message += f"""
+    except Exception as e:
+        success_message = f"""
+[bold green]Report generated successfully![/bold green]
+
 [yellow]Could not start HTTP server: {e}[/yellow]
 [dim]You can manually serve the file with:[/dim]
 [cyan]cd {report_path.parent} && python -m http.server[/cyan]
-"""
-    else:
-        success_message += """
-[dim]Click the link above or open the file in your browser.[/dim]
 """
 
     console.print(
@@ -369,6 +420,11 @@ def main() -> int:
                 do_it_for_me_placeholder()
                 continue
 
+            if choice == "browse":
+                # Browse existing reports
+                browse_existing_reports()
+                continue
+
             if choice == "instructions":
                 # Show instructions and wait for user
                 display_instructions()
@@ -398,13 +454,8 @@ def main() -> int:
         if report_path is None:
             return 1
 
-        # Ask if user wants HTTP serving
-        serve_http = ask_serve_http()
-        if serve_http is None:
-            serve_http = False
-
-        # Display success and optionally start server
-        server = display_success(report_path, serve_http=serve_http)
+        # Display success and start server
+        server = display_success(report_path)
 
         # If server is running, wait for Ctrl+C
         if server:
