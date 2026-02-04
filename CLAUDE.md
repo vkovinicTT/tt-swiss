@@ -26,23 +26,23 @@ tt-memory-profiler path/to/your_model.py
 tt-memory-profiler --log path/to/your_model.py
 
 # Parse existing log file
-tt-memory-profiler --analyze logs/script_*/script_profile.log
+tt-memory-profiler --analyze path/to/script_profile.log
 
 # Generate visualization from parsed data
-tt-memory-profiler --visualize logs/script_YYYYMMDD_HHMMSS/
+tt-memory-profiler --visualize ~/.ttmem/reports/<report-name>/
 
 # Extract last run from multi-pass logs (removes warmup)
-python memory_profiler/extract_last_run.py logs/*/script_profile.log
+python memory_profiler/extract_last_run.py path/to/script_profile.log
 
 # Standalone visualization generation
-python memory_profiler/generate_viz.py logs/script_YYYYMMDD_HHMMSS/
+python memory_profiler/generate_viz.py ~/.ttmem/reports/<report-name>/
 ```
 
 ## Architecture
 
 ### Processing Pipeline
 
-1. **interactive_cli.py** - Interactive CLI (`ttmem`), guides users through log processing with built-in HTTP server for remote access
+1. **interactive_cli.py** - Interactive CLI (`ttmem`), guides users through log processing with built-in HTTP server for remote access. Includes option to browse and serve existing reports from `~/.ttmem/reports/`
 2. **run_profiled.py** - CLI entry point (`tt-memory-profiler`), orchestrates the pipeline with 4 modes: default (full), --log, --analyze, --visualize
 3. **parser.py** - Main log parser, coordinates all sub-parsers and produces synchronized JSON outputs
 4. **mlir_parser.py** - Extracts MLIR operation details (op names, shapes, dtypes, attributes) using regex
@@ -59,13 +59,14 @@ python memory_profiler/generate_viz.py logs/script_YYYYMMDD_HHMMSS/
 ### Output Structure
 
 ```
-./logs/<script_name>_YYYYMMDD_HHMMSS/
-├── <script_name>_profile.log         # Raw runtime logs
-├── <script_name>_memory.json         # Memory stats per operation
-├── <script_name>_operations.json     # Operation metadata
-├── <script_name>_inputs_registry.json # Weights/constants/inputs registry
-└── <script_name>_report.html         # Interactive visualization
+~/.ttmem/reports/<report-name>/
+├── <report-name>_memory.json         # Memory stats per operation
+├── <report-name>_operations.json     # Operation metadata
+├── <report-name>_inputs_registry.json # Weights/constants/inputs registry
+└── <report-name>_report.html         # Interactive visualization
 ```
+
+Note: `<report-name>` has underscores replaced with hyphens from the original script name.
 
 ## Prerequisites
 
