@@ -21,27 +21,31 @@ from typing import Dict, List, Tuple
 class MemoryVisualizer:
     """Generate interactive HTML visualization reports from memory profiler output"""
 
-    def __init__(self, run_dir: Path):
+    def __init__(self, run_dir: Path, script_name: str = None):
         """
         Initialize visualizer with a profiler run directory.
 
         Args:
             run_dir: Path to profiler output directory containing JSON files
+            script_name: Optional explicit script name. If not provided, inferred from directory name.
         """
         self.run_dir = Path(run_dir)
 
-        # Determine script name from directory name
+        # Use provided script_name or infer from directory name
         # Format is: {script_name}_{timestamp} where timestamp is YYYYMMDD_HHMMSS
         # So we join all parts except the last two (date and time)
-        parts = self.run_dir.name.split("_")
-        if len(parts) >= 3:
-            script_name = "_".join(parts[:-2])
+        if script_name is not None:
+            self.script_name = script_name
         else:
-            script_name = parts[0]
+            parts = self.run_dir.name.split("_")
+            if len(parts) >= 3:
+                self.script_name = "_".join(parts[:-2])
+            else:
+                self.script_name = parts[0]
 
-        self.mem_file = self.run_dir / f"{script_name}_memory.json"
-        self.ops_file = self.run_dir / f"{script_name}_operations.json"
-        self.registry_file = self.run_dir / f"{script_name}_inputs_registry.json"
+        self.mem_file = self.run_dir / f"{self.script_name}_memory.json"
+        self.ops_file = self.run_dir / f"{self.script_name}_operations.json"
+        self.registry_file = self.run_dir / f"{self.script_name}_inputs_registry.json"
 
         # Load data
         with open(self.mem_file) as f:
@@ -82,13 +86,7 @@ class MemoryVisualizer:
             Path to generated HTML file
         """
         if output_path is None:
-            # Determine script name from directory name
-            parts = self.run_dir.name.split("_")
-            if len(parts) >= 3:
-                script_name = "_".join(parts[:-2])
-            else:
-                script_name = parts[0]
-            output_path = self.run_dir / f"{script_name}_report.html"
+            output_path = self.run_dir / f"{self.script_name}_report.html"
 
         # Generate all components
         summary_stats = self.compute_summary_stats()

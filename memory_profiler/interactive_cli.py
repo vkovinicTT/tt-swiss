@@ -46,9 +46,11 @@ CUSTOM_STYLE = InquirerPyStyle({
 try:
     from .parser import parse_log_file, validate_outputs
     from .visualizer import MemoryVisualizer
+    from .run_profiled import sanitize_report_name, get_reports_dir
 except ImportError:
     from parser import parse_log_file, validate_outputs
     from visualizer import MemoryVisualizer
+    from run_profiled import sanitize_report_name, get_reports_dir
 
 # ASCII Logo using only - and | characters
 LOGO = r"""
@@ -196,25 +198,24 @@ def process_log_file(log_path: str) -> Optional[Path]:
     """
     Process the log file and generate the HTML report.
 
+    Reports are saved to ~/.ttmem/reports/<report_name>/ with sanitized names.
+
     Returns the path to the generated report, or None on failure.
     """
     log_file = Path(log_path)
-    run_dir = log_file.parent
 
-    # Determine script name from log file name
-    # Expected format: <script_name>_profile.log
-    log_name = log_file.name
-    if log_name.endswith("_profile.log"):
-        script_name = log_name[:-12]  # Remove "_profile.log"
-    else:
-        script_name = log_file.stem
+    # Sanitize log file name and save to ~/.ttmem/reports/<report_name>/
+    report_name = sanitize_report_name(log_file.stem)
+    run_dir = get_reports_dir() / report_name
+    run_dir.mkdir(parents=True, exist_ok=True)
 
-    # Define output paths
-    mem_output = run_dir / f"{script_name}_memory.json"
-    ops_output = run_dir / f"{script_name}_operations.json"
-    registry_output = run_dir / f"{script_name}_inputs_registry.json"
+    # Define output paths using sanitized report name
+    mem_output = run_dir / f"{report_name}_memory.json"
+    ops_output = run_dir / f"{report_name}_operations.json"
+    registry_output = run_dir / f"{report_name}_inputs_registry.json"
 
     console.print()
+    console.print(f"[dim]Output directory: {run_dir}[/dim]")
 
     # Step 1: Parse log file
     with console.status("[bold cyan]Parsing log file...", spinner="dots") as status:
@@ -238,7 +239,7 @@ def process_log_file(log_path: str) -> Optional[Path]:
     # Step 3: Generate visualization
     with console.status("[bold cyan]Generating HTML report...", spinner="dots") as status:
         try:
-            visualizer = MemoryVisualizer(run_dir)
+            visualizer = MemoryVisualizer(run_dir, script_name=report_name)
             report_path = visualizer.generate_report()
         except Exception as e:
             console.print(f"[red]Error generating report: {e}[/red]")

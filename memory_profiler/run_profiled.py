@@ -37,6 +37,21 @@ from datetime import datetime
 from pathlib import Path
 
 
+def sanitize_report_name(log_name: str) -> str:
+    """Sanitize log file name: remove _profile suffix, replace / and _ with -"""
+    name = log_name
+    if name.endswith("_profile"):
+        name = name[:-8]
+    return name.replace("/", "-").replace("_", "-")
+
+
+def get_reports_dir() -> Path:
+    """Get ~/.ttmem/reports/, creating if needed"""
+    reports_dir = Path.home() / ".ttmem" / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    return reports_dir
+
+
 def run_and_capture(target_script: Path, output_dir: Path, script_name: str) -> tuple:
     """Run the target script and capture logs"""
     log_file = output_dir / f"{script_name}_profile.log"
@@ -109,11 +124,17 @@ def analyze_log(log_file: Path, output_dir: Path, script_name: str):
         sys.exit(1)
 
 
-def generate_visualization(run_dir: Path):
-    """Generate visualization from existing run directory"""
-    # Determine script name from directory
-    dir_name = run_dir.name
-    script_name = "_".join(dir_name.split("_")[:-2]) if "_" in dir_name else "decoder"
+def generate_visualization(run_dir: Path, script_name: str = None):
+    """Generate visualization from existing run directory
+
+    Args:
+        run_dir: Path to the directory containing JSON files
+        script_name: Optional explicit script name. If not provided, inferred from directory name.
+    """
+    # Determine script name from directory if not provided
+    if script_name is None:
+        dir_name = run_dir.name
+        script_name = "_".join(dir_name.split("_")[:-2]) if "_" in dir_name else "decoder"
 
     try:
         from memory_profiler.visualizer import MemoryVisualizer
@@ -124,7 +145,7 @@ def generate_visualization(run_dir: Path):
         print(f"Run directory: {run_dir}")
         print("=" * 70)
 
-        viz = MemoryVisualizer(run_dir)
+        viz = MemoryVisualizer(run_dir, script_name=script_name)
         report_path = viz.generate_report()
 
         print("\n" + "=" * 70)
@@ -205,9 +226,10 @@ Examples:
             print(f"Error: Log file not found: {log_file}")
             sys.exit(1)
 
-        # Determine output directory and script name from log file path
-        output_dir = log_file.parent
-        script_name = log_file.stem.replace("_profile", "")
+        # Sanitize log file name and save to ~/.ttmem/reports/<report_name>/
+        report_name = sanitize_report_name(log_file.stem)
+        output_dir = get_reports_dir() / report_name
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         print("=" * 70)
         print("Memory Profiler - Analyze Mode")
@@ -216,7 +238,8 @@ Examples:
         print(f"Output directory: {output_dir}")
         print("=" * 70)
 
-        analyze_log(log_file, output_dir, script_name)
+        analyze_log(log_file, output_dir, report_name)
+        generate_visualization(output_dir, script_name=report_name)
 
     # Mode 3 & 4: Run script (with or without --log flag)
     elif args.script_path:
