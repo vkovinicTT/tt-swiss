@@ -10,8 +10,10 @@ This package provides tools to:
 - Extract synchronized operation and memory data
 - Generate JSON outputs for analysis
 - Create interactive HTML visualization reports
+- Generate LLM-friendly text reports
 """
 
 from .parser import parse_log_file
+from .text_formatter import LLMTextFormatter
 
-__all__ = ["parse_log_file"]
+__all__ = ["parse_log_file", "LLMTextFormatter"]

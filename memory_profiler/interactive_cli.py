@@ -7,8 +7,14 @@ Interactive CLI tool for TT Memory Profiler.
 
 Provides a user-friendly interface for processing memory logs
 and generating HTML reports.
+
+Supports both interactive mode and command-line mode:
+  ttmem                           # Interactive mode
+  ttmem --llm --logfile log.log   # LLM report to stdout
+  ttmem --llm --logfile log.log -o report.md  # LLM report to file
 """
 
+import argparse
 import http.server
 import os
 import socket
@@ -18,39 +24,51 @@ import threading
 from pathlib import Path
 from typing import Optional, Tuple
 
-try:
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.spinner import Spinner
-    from rich.live import Live
-    from InquirerPy import inquirer
-    from InquirerPy.base.control import Choice
-    from InquirerPy.utils import InquirerPyStyle
-except ImportError:
-    print("Error: Required packages not found. Please install with:")
-    print("  pip install rich InquirerPy")
-    sys.exit(1)
-
-# Custom style for InquirerPy prompts (cyan/blue theme matching the logo)
-CUSTOM_STYLE = InquirerPyStyle({
-    "questionmark": "fg:cyan bold",
-    "question": "bold",
-    "answer": "fg:cyan bold",
-    "pointer": "fg:cyan bold",
-    "highlighted": "fg:cyan bold",
-    "selected": "fg:cyan",
-    "instruction": "fg:gray",
-})
-
 # Handle both package import and direct execution
 try:
     from .parser import parse_log_file, validate_outputs
-    from .visualizer import MemoryVisualizer
+    from .text_formatter import LLMTextFormatter
     from .run_profiled import sanitize_report_name, get_reports_dir
 except ImportError:
     from parser import parse_log_file, validate_outputs
-    from visualizer import MemoryVisualizer
+    from text_formatter import LLMTextFormatter
     from run_profiled import sanitize_report_name, get_reports_dir
+
+
+def _import_interactive_deps():
+    """Import dependencies needed for interactive mode. Returns True if successful."""
+    global Console, Panel, Spinner, Live, inquirer, Choice, InquirerPyStyle
+    global MemoryVisualizer, CUSTOM_STYLE, console
+
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.spinner import Spinner
+        from rich.live import Live
+        from InquirerPy import inquirer
+        from InquirerPy.base.control import Choice
+        from InquirerPy.utils import InquirerPyStyle
+    except ImportError:
+        return False
+
+    try:
+        from .visualizer import MemoryVisualizer
+    except ImportError:
+        from visualizer import MemoryVisualizer
+
+    # Custom style for InquirerPy prompts (cyan/blue theme matching the logo)
+    CUSTOM_STYLE = InquirerPyStyle({
+        "questionmark": "fg:cyan bold",
+        "question": "bold",
+        "answer": "fg:cyan bold",
+        "pointer": "fg:cyan bold",
+        "highlighted": "fg:cyan bold",
+        "selected": "fg:cyan",
+        "instruction": "fg:gray",
+    })
+
+    console = Console()
+    return True
 
 # ASCII Logo using only - and | characters
 LOGO = r"""
@@ -61,7 +79,8 @@ LOGO = r"""
    ||      ||    |      |  |-----  |      |
 """
 
-console = Console()
+# console is initialized by _import_interactive_deps() for interactive mode
+console = None
 
 
 def display_intro() -> None:
@@ -401,8 +420,132 @@ def display_success(report_path: Path) -> Optional[socketserver.TCPServer]:
     return server
 
 
+def generate_llm_report(log_path: str, output_file: Optional[Path] = None) -> int:
+    """
+    Generate LLM-friendly text report from a log file.
+
+    Args:
+        log_path: Path to the log file to analyze
+        output_file: Optional output file path. If None, prints to stdout.
+
+    Returns:
+        0 on success, 1 on failure
+    """
+    log_file = Path(log_path)
+
+    # Validate log file
+    error = validate_log_path(log_path)
+    if error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+
+    # Sanitize log file name and save to ~/.ttmem/reports/<report_name>/
+    report_name = sanitize_report_name(log_file.stem)
+    run_dir = get_reports_dir() / report_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Define output paths
+    mem_output = run_dir / f"{report_name}_memory.json"
+    ops_output = run_dir / f"{report_name}_operations.json"
+    registry_output = run_dir / f"{report_name}_inputs_registry.json"
+    ir_output = run_dir / f"{report_name}_ir.json"
+
+    # Parse log file (suppress output when generating to stdout)
+    try:
+        if output_file:
+            print(f"Parsing log file: {log_file}", file=sys.stderr)
+            print(f"Output directory: {run_dir}", file=sys.stderr)
+
+        parse_log_file(
+            str(log_file),
+            str(mem_output),
+            str(ops_output),
+            str(registry_output),
+            str(ir_output),
+        )
+    except Exception as e:
+        print(f"Error parsing log file: {e}", file=sys.stderr)
+        return 1
+
+    # Validate outputs
+    if not validate_outputs(str(mem_output), str(ops_output)):
+        print("Error: Output validation failed", file=sys.stderr)
+        return 1
+
+    # Generate LLM report
+    try:
+        formatter = LLMTextFormatter(run_dir, script_name=report_name)
+        report = formatter.generate_report(output_file=output_file)
+
+        if output_file:
+            print(f"LLM report written to: {output_file}", file=sys.stderr)
+        else:
+            print(report)
+
+        return 0
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error generating LLM report: {e}", file=sys.stderr)
+        return 1
+
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="TT Memory Profiler - Interactive CLI for memory profiling",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Interactive mode (default)
+  ttmem
+
+  # LLM-friendly text report (output to stdout)
+  ttmem --llm --logfile path/to/log.log
+
+  # LLM-friendly text report (output to file)
+  ttmem --llm --logfile path/to/log.log -o report.md
+        """,
+    )
+    parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="Output LLM-friendly text report instead of HTML",
+    )
+    parser.add_argument(
+        "--logfile",
+        metavar="LOG_FILE",
+        help="Log file to analyze (use with --llm)",
+    )
+    parser.add_argument(
+        "-o", "--output-file",
+        metavar="FILE",
+        help="Write LLM report to file instead of stdout (use with --llm)",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
     """Main entry point for the interactive CLI."""
+    args = parse_args()
+
+    # Handle --llm mode (no rich/InquirerPy needed)
+    if args.llm:
+        if not args.logfile:
+            print("Error: --llm requires --logfile", file=sys.stderr)
+            return 1
+        output_file = Path(args.output_file) if args.output_file else None
+        return generate_llm_report(args.logfile, output_file)
+
+    # Interactive mode - requires rich and InquirerPy
+    if not _import_interactive_deps():
+        print("Error: Required packages not found for interactive mode. Please install with:")
+        print("  pip install rich InquirerPy")
+        print("\nAlternatively, use --llm mode which doesn't require these packages:")
+        print("  ttmem --llm --logfile path/to/log.log")
+        return 1
+
     try:
         # Display intro
         display_intro()
