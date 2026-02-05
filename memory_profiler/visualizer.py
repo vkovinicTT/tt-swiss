@@ -195,12 +195,40 @@ class MemoryVisualizer:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Memory Profile: {self.run_dir.name}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <style>
+        :root {{
+            /* Background colors */
+            --bg-canvas: #111217;
+            --bg-primary: #181b1f;
+            --bg-secondary: #22252b;
+            --bg-tertiary: #2a2d33;
+
+            /* Text colors */
+            --text-primary: rgb(204, 204, 220);
+            --text-secondary: rgba(204, 204, 220, 0.65);
+            --text-disabled: rgba(204, 204, 220, 0.40);
+            --text-link: #6e9fff;
+
+            /* Borders */
+            --border-weak: rgba(204, 204, 220, 0.07);
+            --border-medium: rgba(204, 204, 220, 0.12);
+            --border-strong: rgba(204, 204, 220, 0.20);
+
+            /* Accents */
+            --accent-primary: #3d71d9;
+            --accent-success: #1a7f4b;
+            --accent-warning: #ff9900;
+            --accent-error: #d10e5c;
+        }}
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f5f5f5;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-canvas);
+            color: var(--text-primary);
         }}
 
         /* App layout with sidebar */
@@ -212,22 +240,23 @@ class MemoryVisualizer:
         /* Sidebar styles */
         .sidebar {{
             width: 220px;
-            background: #1a1a2e;
-            color: white;
+            background: var(--bg-primary);
+            color: var(--text-primary);
             padding: 20px 0;
             flex-shrink: 0;
             position: fixed;
             height: 100vh;
             overflow-y: auto;
+            border-right: 1px solid var(--border-medium);
         }}
         .sidebar-header {{
             padding: 0 20px 20px;
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid var(--border-medium);
             margin-bottom: 20px;
         }}
         .sidebar-header h2 {{
             font-size: 18px;
-            color: #4CAF50;
+            color: var(--accent-primary);
             margin: 0;
         }}
         .sidebar-nav {{
@@ -239,19 +268,19 @@ class MemoryVisualizer:
         .sidebar-nav a {{
             display: block;
             padding: 12px 20px;
-            color: #ccc;
+            color: var(--text-secondary);
             text-decoration: none;
             transition: all 0.2s;
             border-left: 3px solid transparent;
         }}
         .sidebar-nav a:hover {{
-            background: rgba(255,255,255,0.1);
-            color: white;
+            background: rgba(255,255,255,0.05);
+            color: var(--text-primary);
         }}
         .sidebar-nav a.active {{
-            background: rgba(76, 175, 80, 0.2);
-            color: #4CAF50;
-            border-left-color: #4CAF50;
+            background: rgba(61, 113, 217, 0.15);
+            color: var(--accent-primary);
+            border-left-color: var(--accent-primary);
         }}
 
         /* Main content area */
@@ -273,36 +302,37 @@ class MemoryVisualizer:
         .container {{
             max-width: 1400px;
             margin: 0 auto;
-            background: white;
+            background: var(--bg-primary);
             padding: 30px;
             border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border: 1px solid var(--border-medium);
         }}
         h1 {{
-            color: #333;
+            color: var(--text-primary);
             margin-bottom: 10px;
-            border-bottom: 3px solid #4CAF50;
+            border-bottom: 3px solid var(--accent-primary);
             padding-bottom: 10px;
         }}
         h2 {{
-            color: #555;
+            color: var(--text-primary);
             margin-top: 30px;
             margin-bottom: 15px;
-            border-bottom: 2px solid #ddd;
+            border-bottom: 2px solid var(--border-medium);
             padding-bottom: 8px;
         }}
         h3 {{
-            color: #666;
+            color: var(--text-secondary);
             margin-top: 20px;
             margin-bottom: 10px;
         }}
         .metadata {{
-            background: #f9f9f9;
+            background: var(--bg-secondary);
             padding: 15px;
             border-radius: 5px;
             margin-bottom: 20px;
-            color: #666;
+            color: var(--text-secondary);
             font-size: 14px;
+            border: 1px solid var(--border-weak);
         }}
         .summary-grid {{
             display: grid;
@@ -311,48 +341,54 @@ class MemoryVisualizer:
             margin-bottom: 20px;
         }}
         .summary-card {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
             padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+            border-left: 4px solid var(--accent-primary);
+            border-top: 1px solid var(--border-weak);
+            border-right: 1px solid var(--border-weak);
+            border-bottom: 1px solid var(--border-weak);
         }}
         .summary-card.green {{
-            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            border-left-color: var(--accent-success);
         }}
         .summary-card.blue {{
-            background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%);
+            border-left-color: #2196F3;
         }}
         .summary-card.orange {{
-            background: linear-gradient(135deg, #ee0979 0%, #ff6a00 100%);
+            border-left-color: var(--accent-warning);
         }}
         .summary-card .label {{
             font-size: 12px;
-            opacity: 0.9;
+            color: var(--text-secondary);
             margin-bottom: 5px;
         }}
         .summary-card .value {{
             font-size: 24px;
-            font-weight: bold;
+            font-weight: 600;
+            color: var(--text-primary);
         }}
         .graph-container {{
             margin: 20px 0;
-            background: white;
+            background: var(--bg-primary);
             padding: 10px;
             border-radius: 5px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border: 1px solid var(--border-medium);
         }}
         .peak-card {{
-            background: #fff;
-            border-left: 4px solid #4CAF50;
+            background: var(--bg-secondary);
+            border-left: 4px solid var(--accent-success);
             padding: 20px;
             margin-bottom: 20px;
             border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            border-top: 1px solid var(--border-weak);
+            border-right: 1px solid var(--border-weak);
+            border-bottom: 1px solid var(--border-weak);
         }}
         .peak-card h3 {{
             margin-top: 0;
-            color: #4CAF50;
+            color: var(--text-primary);
         }}
         .peak-card table {{
             width: 100%;
@@ -360,42 +396,48 @@ class MemoryVisualizer:
         }}
         .peak-card td {{
             padding: 8px;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid var(--border-weak);
+            color: var(--text-primary);
         }}
         .peak-card td:first-child {{
-            font-weight: bold;
+            font-weight: 600;
             width: 200px;
-            color: #666;
+            color: var(--text-secondary);
         }}
         table.data-table {{
             width: 100%;
             border-collapse: collapse;
             margin: 20px 0;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            border: 1px solid var(--border-medium);
+            border-radius: 5px;
+            overflow: hidden;
         }}
         table.data-table th {{
-            background: #4CAF50;
-            color: white;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
             padding: 12px;
             text-align: left;
             font-weight: 600;
+            border-bottom: 1px solid var(--border-medium);
         }}
         table.data-table td {{
             padding: 10px 12px;
-            border-bottom: 1px solid #ddd;
+            border-bottom: 1px solid var(--border-weak);
+            color: var(--text-primary);
         }}
         table.data-table tr:hover {{
-            background: #f5f5f5;
+            background: var(--bg-tertiary);
         }}
         table.data-table tr:nth-child(even) {{
-            background: #f9f9f9;
+            background: var(--bg-secondary);
         }}
         .code {{
-            font-family: 'Courier New', monospace;
-            background: #f4f4f4;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            background: var(--bg-tertiary);
             padding: 2px 6px;
             border-radius: 3px;
             font-size: 12px;
+            color: var(--text-primary);
         }}
         .badge {{
             display: inline-block;
@@ -405,56 +447,58 @@ class MemoryVisualizer:
             font-weight: bold;
             margin-right: 5px;
         }}
-        .badge.dram {{ background: #ff9800; color: white; }}
-        .badge.l1 {{ background: #2196F3; color: white; }}
+        .badge.dram {{ background: var(--accent-warning); color: #111; }}
+        .badge.l1 {{ background: #2196F3; color: #111; }}
         .badge.l1-small {{ background: #9C27B0; color: white; }}
         .badge.trace {{ background: #607D8B; color: white; }}
 
         /* Operation link styles */
         .op-link {{
-            color: #2196F3;
+            color: var(--text-link);
             text-decoration: none;
             cursor: pointer;
         }}
         .op-link:hover {{
             text-decoration: underline;
-            color: #1976D2;
+            color: #8ab4ff;
         }}
 
         /* IR View styles */
         .ir-view-container {{
-            background: white;
+            background: var(--bg-primary);
             border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border: 1px solid var(--border-medium);
             overflow: hidden;
         }}
         .ir-tabs {{
             display: flex;
-            background: #333;
+            background: var(--bg-secondary);
             padding: 0;
+            border-bottom: 1px solid var(--border-medium);
         }}
         .ir-tab {{
             padding: 15px 30px;
-            color: #aaa;
+            color: var(--text-secondary);
             cursor: pointer;
             border: none;
             background: none;
             font-size: 14px;
             font-weight: 500;
             transition: all 0.2s;
+            font-family: 'Inter', sans-serif;
         }}
         .ir-tab:hover {{
-            color: white;
-            background: rgba(255,255,255,0.1);
+            color: var(--text-primary);
+            background: var(--bg-tertiary);
         }}
         .ir-tab.active {{
-            color: #4CAF50;
-            background: #1a1a2e;
+            color: var(--accent-primary);
+            background: var(--bg-primary);
         }}
         .ir-content {{
             display: none;
-            background: #1a1a2e;
-            color: #e0e0e0;
+            background: var(--bg-primary);
+            color: var(--text-primary);
             font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
             font-size: 13px;
             line-height: 1.5;
@@ -469,23 +513,23 @@ class MemoryVisualizer:
             padding: 0 15px;
         }}
         .ir-line:hover {{
-            background: rgba(255,255,255,0.05);
+            background: var(--bg-secondary);
         }}
         .ir-line.highlighted {{
-            background: rgba(76, 175, 80, 0.3);
+            background: rgba(61, 113, 217, 0.3);
             animation: highlight-pulse 1s ease-out;
         }}
         @keyframes highlight-pulse {{
-            0% {{ background: rgba(76, 175, 80, 0.6); }}
-            100% {{ background: rgba(76, 175, 80, 0.3); }}
+            0% {{ background: rgba(61, 113, 217, 0.5); }}
+            100% {{ background: rgba(61, 113, 217, 0.3); }}
         }}
         .line-num {{
-            color: #666;
+            color: var(--text-disabled);
             min-width: 50px;
             text-align: right;
             padding-right: 15px;
             user-select: none;
-            border-right: 1px solid #333;
+            border-right: 1px solid var(--border-medium);
             margin-right: 15px;
         }}
         .line-content {{
@@ -494,7 +538,7 @@ class MemoryVisualizer:
         .ir-empty {{
             padding: 40px;
             text-align: center;
-            color: #888;
+            color: var(--text-secondary);
             font-size: 16px;
         }}
     </style>
@@ -838,12 +882,26 @@ class MemoryVisualizer:
         layout = {
             "height": 450,
             "showlegend": True,
+            "paper_bgcolor": "transparent",
+            "plot_bgcolor": "transparent",
             "title": {
                 "text": "Memory Usage Across Operation Execution",
-                "font": {"size": 18},
+                "font": {"size": 18, "color": "rgb(204, 204, 220)"},
             },
-            "xaxis": {"title": "Operation Index"},
-            "yaxis": {"title": "DRAM (MB/bank)"},
+            "xaxis": {
+                "title": {"text": "Operation Index", "font": {"color": "rgb(204, 204, 220)"}},
+                "tickfont": {"color": "rgb(204, 204, 220)"},
+                "gridcolor": "rgba(204, 204, 220, 0.08)",
+                "linecolor": "rgba(204, 204, 220, 0.20)",
+                "zerolinecolor": "rgba(204, 204, 220, 0.20)",
+            },
+            "yaxis": {
+                "title": {"text": "DRAM (MB/bank)", "font": {"color": "rgb(204, 204, 220)"}},
+                "tickfont": {"color": "rgb(204, 204, 220)"},
+                "gridcolor": "rgba(204, 204, 220, 0.08)",
+                "linecolor": "rgba(204, 204, 220, 0.20)",
+                "zerolinecolor": "rgba(204, 204, 220, 0.20)",
+            },
             "updatemenus": [
                 {
                     "type": "buttons",
@@ -855,9 +913,9 @@ class MemoryVisualizer:
                     "yanchor": "top",
                     "buttons": buttons,
                     "showactive": True,
-                    "bgcolor": "#f0f0f0",
-                    "bordercolor": "#ccc",
-                    "font": {"size": 12},
+                    "bgcolor": "#22252b",
+                    "bordercolor": "rgba(204, 204, 220, 0.20)",
+                    "font": {"size": 12, "color": "rgb(204, 204, 220)"},
                 }
             ],
             "legend": {
@@ -866,6 +924,12 @@ class MemoryVisualizer:
                 "y": 1.02,
                 "xanchor": "right",
                 "x": 1,
+                "font": {"color": "rgb(204, 204, 220)"},
+            },
+            "hoverlabel": {
+                "bgcolor": "#22252b",
+                "bordercolor": "rgba(204, 204, 220, 0.20)",
+                "font": {"color": "rgb(204, 204, 220)"},
             },
         }
 
@@ -931,8 +995,16 @@ class MemoryVisualizer:
         layout = {
             "height": 250 * num_types,
             "showlegend": True,
-            "title": {"text": "Memory Allocation vs Free Space", "font": {"size": 18}},
+            "paper_bgcolor": "transparent",
+            "plot_bgcolor": "transparent",
+            "title": {"text": "Memory Allocation vs Free Space", "font": {"size": 18, "color": "rgb(204, 204, 220)"}},
             "grid": {"rows": num_types, "columns": 1, "pattern": "independent"},
+            "legend": {"font": {"color": "rgb(204, 204, 220)"}},
+            "hoverlabel": {
+                "bgcolor": "#22252b",
+                "bordercolor": "rgba(204, 204, 220, 0.20)",
+                "font": {"color": "rgb(204, 204, 220)"},
+            },
         }
 
         for i, mem_type in enumerate(memory_types):
@@ -942,11 +1014,17 @@ class MemoryVisualizer:
             top = 1.0 - i * (row_height + gap)
             bottom = top - row_height
             layout[xkey] = {
-                "title": "Operation Index",
+                "title": {"text": "Operation Index", "font": {"color": "rgb(204, 204, 220)"}},
+                "tickfont": {"color": "rgb(204, 204, 220)"},
+                "gridcolor": "rgba(204, 204, 220, 0.08)",
+                "linecolor": "rgba(204, 204, 220, 0.20)",
                 "anchor": f"y{axis_idx}" if axis_idx > 1 else "y",
             }
             layout[ykey] = {
-                "title": f"{mem_type} (MB/bank)",
+                "title": {"text": f"{mem_type} (MB/bank)", "font": {"color": "rgb(204, 204, 220)"}},
+                "tickfont": {"color": "rgb(204, 204, 220)"},
+                "gridcolor": "rgba(204, 204, 220, 0.08)",
+                "linecolor": "rgba(204, 204, 220, 0.20)",
                 "domain": [max(0, bottom), top],
             }
 
@@ -1154,7 +1232,7 @@ class MemoryVisualizer:
 
         total_weight_mb = self.registry["metadata"].get("total_weight_MB", 0)
         return f"""
-            <div class="summary-card" style="background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);">
+            <div class="summary-card" style="border-left-color: #2196F3;">
                 <div class="label">Model Weights</div>
                 <div class="value">{total_weight_mb:.2f} MB</div>
             </div>"""
@@ -1306,13 +1384,32 @@ class MemoryVisualizer:
         layout = {
             "height": 400,
             "showlegend": True,
+            "paper_bgcolor": "transparent",
+            "plot_bgcolor": "transparent",
             "title": {
                 "text": f"DRAM Memory Breakdown (Declared Weights: {total_weight_MB:.1f} MB, Persistent Baseline: {weight_baseline:.1f} MB)",
-                "font": {"size": 16},
+                "font": {"size": 16, "color": "rgb(204, 204, 220)"},
             },
-            "xaxis": {"title": "Operation Index"},
-            "yaxis": {"title": "Memory (MB/bank)", "rangemode": "tozero"},
+            "xaxis": {
+                "title": {"text": "Operation Index", "font": {"color": "rgb(204, 204, 220)"}},
+                "tickfont": {"color": "rgb(204, 204, 220)"},
+                "gridcolor": "rgba(204, 204, 220, 0.08)",
+                "linecolor": "rgba(204, 204, 220, 0.20)",
+            },
+            "yaxis": {
+                "title": {"text": "Memory (MB/bank)", "font": {"color": "rgb(204, 204, 220)"}},
+                "tickfont": {"color": "rgb(204, 204, 220)"},
+                "gridcolor": "rgba(204, 204, 220, 0.08)",
+                "linecolor": "rgba(204, 204, 220, 0.20)",
+                "rangemode": "tozero",
+            },
             "hovermode": "x",
+            "legend": {"font": {"color": "rgb(204, 204, 220)"}},
+            "hoverlabel": {
+                "bgcolor": "#22252b",
+                "bordercolor": "rgba(204, 204, 220, 0.20)",
+                "font": {"color": "rgb(204, 204, 220)"},
+            },
         }
 
         return {"traces": traces, "layout": layout}
@@ -1390,13 +1487,32 @@ class MemoryVisualizer:
         layout = {
             "height": 400,
             "showlegend": True,
+            "paper_bgcolor": "transparent",
+            "plot_bgcolor": "transparent",
             "title": {
                 "text": f"Tile Padding Memory Overhead (DRAM) - Peak: {peak_overhead_pct:.1f}%",
-                "font": {"size": 16},
+                "font": {"size": 16, "color": "rgb(204, 204, 220)"},
             },
-            "xaxis": {"title": "Operation Index"},
-            "yaxis": {"title": "Total Memory (MB)", "rangemode": "tozero"},
+            "xaxis": {
+                "title": {"text": "Operation Index", "font": {"color": "rgb(204, 204, 220)"}},
+                "tickfont": {"color": "rgb(204, 204, 220)"},
+                "gridcolor": "rgba(204, 204, 220, 0.08)",
+                "linecolor": "rgba(204, 204, 220, 0.20)",
+            },
+            "yaxis": {
+                "title": {"text": "Total Memory (MB)", "font": {"color": "rgb(204, 204, 220)"}},
+                "tickfont": {"color": "rgb(204, 204, 220)"},
+                "gridcolor": "rgba(204, 204, 220, 0.08)",
+                "linecolor": "rgba(204, 204, 220, 0.20)",
+                "rangemode": "tozero",
+            },
             "hovermode": "x",
+            "legend": {"font": {"color": "rgb(204, 204, 220)"}},
+            "hoverlabel": {
+                "bgcolor": "#22252b",
+                "bordercolor": "rgba(204, 204, 220, 0.20)",
+                "font": {"color": "rgb(204, 204, 220)"},
+            },
         }
 
         return {"traces": traces, "layout": layout}
@@ -1430,7 +1546,7 @@ class MemoryVisualizer:
 
         dram_pct = peak_padding_overhead.get("dram_pct", 0)
         return f"""
-            <div class="summary-card" style="background: linear-gradient(135deg, #8B0000 0%, #FF4500 100%);">
+            <div class="summary-card" style="border-left-color: var(--accent-error);">
                 <div class="label">Peak Tile Padding Overhead</div>
                 <div class="value">{dram_pct:.1f}%</div>
             </div>"""
@@ -1445,7 +1561,7 @@ class MemoryVisualizer:
         return f"""
         <!-- Tile Padding Memory Overhead -->
         <h2>Tile Padding Memory Overhead (DRAM)</h2>
-        <p style="color: #666; margin-bottom: 15px;">
+        <p style="color: var(--text-secondary); margin-bottom: 15px;">
             Shows actual allocated memory vs theoretical minimum without 32x32 tile alignment.
         </p>
         <div class="graph-container">
@@ -1544,7 +1660,7 @@ class MemoryVisualizer:
                 <td>{unpadded_str}</td>
                 <td>{padded_str}</td>
                 <td style="font-weight: bold;">{overhead_mb_str}</td>
-                <td style="color: {'red' if overhead_pct > 100 else 'orange' if overhead_pct > 50 else 'inherit'};">{overhead_pct:.1f}%</td>
+                <td style="color: {'#ff6b6b' if overhead_pct > 100 else '#ff9900' if overhead_pct > 50 else 'inherit'};">{overhead_pct:.1f}%</td>
             </tr>"""
             )
 
