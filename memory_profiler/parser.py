@@ -22,6 +22,54 @@ except ImportError:
     from mlir_parser import parse_mlir_operation
 
 
+def calculate_unpadded_memory_state(live_tensors: Dict[str, Dict]) -> Dict:
+    """
+    Calculate total unpadded vs padded memory from all live tensors.
+
+    Args:
+        live_tensors: Dict mapping SSA names to layout_info dicts
+
+    Returns:
+        Dict with DRAM and L1 memory states including unpadded/padded bytes,
+        MB values, overhead, and tensor counts.
+    """
+    result = {
+        "DRAM": {
+            "unpadded_bytes": 0,
+            "padded_bytes": 0,
+            "num_tensors": 0,
+        },
+        "L1": {
+            "unpadded_bytes": 0,
+            "padded_bytes": 0,
+            "num_tensors": 0,
+        },
+    }
+
+    for ssa, layout in live_tensors.items():
+        buf_type = layout.get("buffer_type", "")
+        if buf_type:
+            buf_type_upper = buf_type.upper()
+            if buf_type_upper in result:
+                result[buf_type_upper]["unpadded_bytes"] += layout.get(
+                    "unpadded_bytes", 0
+                )
+                result[buf_type_upper]["padded_bytes"] += layout.get("padded_bytes", 0)
+                result[buf_type_upper]["num_tensors"] += 1
+
+    # Convert to MB and calculate overhead
+    for mem_type in result:
+        r = result[mem_type]
+        r["unpadded_MB"] = r["unpadded_bytes"] / (1024 * 1024)
+        r["padded_MB"] = r["padded_bytes"] / (1024 * 1024)
+        r["overhead_MB"] = r["padded_MB"] - r["unpadded_MB"]
+        r["overhead_pct"] = (
+            (r["overhead_MB"] / r["unpadded_MB"] * 100) if r["unpadded_MB"] > 0 else 0
+        )
+
+    return result
+
+
 def parse_log_file(
     log_path: str,
     mem_output: str,
@@ -60,6 +108,10 @@ def parse_log_file(
     const_eval_stack: List[str] = []
     const_eval_cache_misses: set = set()
     const_eval_ops_count: Dict[str, int] = {}
+
+    # Track live tensors by SSA name for unpadded memory analysis
+    # Key: SSA name (e.g., "%0"), Value: layout_info dict
+    live_tensors: Dict[str, Dict] = {}
 
     while i < len(lines):
         line = lines[i]
@@ -104,9 +156,14 @@ def parse_log_file(
                 skipped_ops += 1
                 continue
 
-            # Skip deallocate operations as per requirements
+            # Handle deallocate operations - track deallocation for unpadded analysis
             if "deallocate" in op_info["mlir_op"]:
                 deallocate_count += 1
+                # Extract deallocated tensor SSA and remove from tracking
+                if op_info.get("inputs"):
+                    deallocated_ssa = op_info["inputs"][0]
+                    if deallocated_ssa in live_tensors:
+                        del live_tensors[deallocated_ssa]
                 i += 1
                 continue
 
@@ -151,6 +208,16 @@ def parse_log_file(
                     mem_info["const_eval_cache_miss"] = False
                     op_info["is_weight_op"] = False
                     mem_info["is_weight_op"] = False
+
+                # Track new tensor allocation from operation output
+                if op_info.get("result") and op_info.get("output_layout_info"):
+                    layout = op_info["output_layout_info"]
+                    if layout and layout.get("buffer_type") in ("dram", "l1"):
+                        live_tensors[op_info["result"]] = layout
+
+                # Calculate unpadded memory state at this operation
+                unpadded_state = calculate_unpadded_memory_state(live_tensors)
+                mem_info["unpadded_memory"] = unpadded_state
 
                 operations.append(op_info)
                 memory_stats.append(mem_info)

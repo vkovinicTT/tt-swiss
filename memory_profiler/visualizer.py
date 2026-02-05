@@ -92,24 +92,34 @@ class MemoryVisualizer:
         summary_stats = self.compute_summary_stats()
         peak_analysis = self.analyze_peaks()
         top_ops = self.get_top_operations(n=10)
+        top_padding_ops = self.get_top_padding_overhead_ops(n=10)
+        peak_padding_overhead = self._calculate_peak_padding_overhead()
 
         # Build HTML
         html = self._build_html(
-            summary_stats=summary_stats, peak_analysis=peak_analysis, top_ops=top_ops
+            summary_stats=summary_stats,
+            peak_analysis=peak_analysis,
+            top_ops=top_ops,
+            top_padding_ops=top_padding_ops,
+            peak_padding_overhead=peak_padding_overhead,
         )
 
         output_path.write_text(html)
         return output_path
 
     def _build_html(
-        self, summary_stats: Dict, peak_analysis: Dict, top_ops: List[Dict]
+        self,
+        summary_stats: Dict,
+        peak_analysis: Dict,
+        top_ops: List[Dict],
+        top_padding_ops: List[Dict] = None,
+        peak_padding_overhead: Dict = None,
     ) -> str:
         """Build complete HTML document with embedded Plotly graphs"""
 
         # Prepare data for JavaScript
         memory_graph_data = self._prepare_memory_graph_data()
-        fragmentation_data = self._prepare_fragmentation_data()
-        weight_activation_data = self._prepare_weight_activation_data()
+        unpadded_comparison_data = self._prepare_unpadded_comparison_data()
 
         html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -296,6 +306,7 @@ class MemoryVisualizer:
                 <div class="value">{summary_stats['memory_types']['DRAM']['avg']:.1f} MB</div>
             </div>
             {self._format_weight_summary_card()}
+            {self._format_padding_overhead_card(peak_padding_overhead)}
         </div>
 
         <!-- Memory Usage Over Time -->
@@ -304,13 +315,7 @@ class MemoryVisualizer:
             <div id="memory-graphs"></div>
         </div>
 
-        <!-- Memory Fragmentation -->
-        <h2>Memory Fragmentation Analysis</h2>
-        <div class="graph-container">
-            <div id="fragmentation-graph"></div>
-        </div>
-
-        {self._format_weight_activation_section()}
+        {self._format_tile_padding_section(top_padding_ops)}
 
         <!-- Peak Memory Analysis -->
         <h2>Peak Memory Analysis</h2>
@@ -325,18 +330,14 @@ class MemoryVisualizer:
     <script>
         // Memory usage graphs data
         const memoryData = {json.dumps(memory_graph_data)};
-        const fragmentationData = {json.dumps(fragmentation_data)};
-        const weightActivationData = {json.dumps(weight_activation_data)};
+        const unpaddedComparisonData = {json.dumps(unpadded_comparison_data)};
 
         // Create memory usage over time graphs
         Plotly.newPlot('memory-graphs', memoryData.traces, memoryData.layout, {{responsive: true}});
 
-        // Create fragmentation graphs
-        Plotly.newPlot('fragmentation-graph', fragmentationData.traces, fragmentationData.layout, {{responsive: true}});
-
-        // Create weight/activation breakdown graph if data available
-        if (weightActivationData && weightActivationData.traces && weightActivationData.traces.length > 0) {{
-            Plotly.newPlot('weight-activation-graph', weightActivationData.traces, weightActivationData.layout, {{responsive: true}});
+        // Create unpadded comparison graph if data available
+        if (unpaddedComparisonData && unpaddedComparisonData.traces && unpaddedComparisonData.traces.length > 0) {{
+            Plotly.newPlot('unpadded-comparison-graph', unpaddedComparisonData.traces, unpaddedComparisonData.layout, {{responsive: true}});
         }}
     </script>
 </body>
@@ -344,13 +345,18 @@ class MemoryVisualizer:
         return html
 
     def _prepare_memory_graph_data(self) -> Dict:
-        """Prepare data for memory usage over time graphs"""
-        memory_types = self.available_memory_types
+        """Prepare data for memory usage over time graph with tab selection"""
+        # Exclude TRACE, only show DRAM, L1, L1_SMALL
+        display_types = [mt for mt in self.available_memory_types if mt != "TRACE"]
+        if not display_types:
+            return {"traces": [], "layout": {}}
+
         traces = []
+        trace_mem_type = []  # Track which memory type each trace belongs to
 
         # Collect all data points with their weight op status and op details
         all_indices = []
-        all_allocated = {mt: [] for mt in memory_types}
+        all_allocated = {mt: [] for mt in display_types}
         weight_op_flags = []
         op_names = []
         input_shapes_list = []
@@ -365,7 +371,7 @@ class MemoryVisualizer:
             idx = op["index"]
             all_indices.append(idx)
             weight_op_flags.append(is_weight_op)
-            for mt in memory_types:
+            for mt in display_types:
                 all_allocated[mt].append(
                     op["memory"][mt]["totalBytesAllocatedPerBank_MB"]
                 )
@@ -391,13 +397,13 @@ class MemoryVisualizer:
         weight_op_indices = [
             idx for idx, flag in zip(all_indices, weight_op_flags) if flag
         ]
-        weight_op_allocated = {mt: [] for mt in memory_types}
+        weight_op_allocated = {mt: [] for mt in display_types}
         weight_op_names = []
         weight_input_shapes = []
         weight_output_shapes = []
         for i, flag in enumerate(weight_op_flags):
             if flag:
-                for mt in memory_types:
+                for mt in display_types:
                     weight_op_allocated[mt].append(all_allocated[mt][i])
                 weight_op_names.append(op_names[i])
                 weight_input_shapes.append(input_shapes_list[i])
@@ -405,12 +411,11 @@ class MemoryVisualizer:
 
         capacity = {
             mt: self.mem_data[0]["memory"][mt]["totalBytesPerBank_MB"]
-            for mt in memory_types
+            for mt in display_types
         }
 
-        for mem_type in memory_types:
-            axis_idx = memory_types.index(mem_type) + 1
-
+        # Create traces for each memory type (all on same axes)
+        for mem_type in display_types:
             # Main line connecting all points (blue)
             traces.append(
                 {
@@ -418,22 +423,21 @@ class MemoryVisualizer:
                     "y": all_allocated[mem_type],
                     "type": "scatter",
                     "mode": "lines+markers",
-                    "name": f"{mem_type}",
+                    "name": "Allocated",
                     "line": {"width": 2, "color": "#1f77b4"},
                     "marker": {"size": 3, "color": "#1f77b4"},
-                    "xaxis": f"x{axis_idx}" if axis_idx > 1 else "x",
-                    "yaxis": f"y{axis_idx}" if axis_idx > 1 else "y",
-                    "showlegend": (mem_type == "DRAM"),
+                    "visible": (mem_type == "DRAM"),  # Only DRAM visible by default
+                    "showlegend": True,
                     "legendgroup": "main",
                     "customdata": list(
                         zip(op_names, input_shapes_list, output_shapes_list)
                     ),
-                    "hovertemplate": f"{mem_type}<br>Op %{{x}}: %{{customdata[0]}}<br>Allocated: %{{y:.2f}} MB<br>Input: %{{customdata[1]}}<br>Output: %{{customdata[2]}}<extra></extra>",
+                    "hovertemplate": f"{mem_type}<br>Op %{{x}}: %{{customdata[0]}}<br>Allocated: %{{y:.2f}} MB/bank<br>Input: %{{customdata[1]}}<br>Output: %{{customdata[2]}}<extra></extra>",
                 }
             )
+            trace_mem_type.append(mem_type)
 
             # Weight operations overlay (red markers on top)
-            # Includes const_eval operations and operations with direct weight inputs
             if weight_op_indices:
                 traces.append(
                     {
@@ -441,11 +445,10 @@ class MemoryVisualizer:
                         "y": weight_op_allocated[mem_type],
                         "type": "scatter",
                         "mode": "markers",
-                        "name": "weight_ops",
+                        "name": "Weight Ops",
                         "marker": {"size": 5, "color": "red", "symbol": "circle"},
-                        "xaxis": f"x{axis_idx}" if axis_idx > 1 else "x",
-                        "yaxis": f"y{axis_idx}" if axis_idx > 1 else "y",
-                        "showlegend": (mem_type == "DRAM"),
+                        "visible": (mem_type == "DRAM"),
+                        "showlegend": True,
                         "legendgroup": "weight_ops",
                         "customdata": list(
                             zip(
@@ -454,9 +457,10 @@ class MemoryVisualizer:
                                 weight_output_shapes,
                             )
                         ),
-                        "hovertemplate": f"{mem_type} (weight op)<br>Op %{{x}}: %{{customdata[0]}}<br>Allocated: %{{y:.2f}} MB<br>Input: %{{customdata[1]}}<br>Output: %{{customdata[2]}}<extra></extra>",
+                        "hovertemplate": f"{mem_type} (weight op)<br>Op %{{x}}: %{{customdata[0]}}<br>Allocated: %{{y:.2f}} MB/bank<br>Input: %{{customdata[1]}}<br>Output: %{{customdata[2]}}<extra></extra>",
                     }
                 )
+                trace_mem_type.append(mem_type)
 
             # Capacity line
             traces.append(
@@ -465,44 +469,64 @@ class MemoryVisualizer:
                     "y": [capacity[mem_type], capacity[mem_type]],
                     "type": "scatter",
                     "mode": "lines",
-                    "name": f"{mem_type} Capacity",
+                    "name": "Capacity",
                     "line": {"dash": "dash", "color": "gray", "width": 1},
-                    "xaxis": f"x{axis_idx}" if axis_idx > 1 else "x",
-                    "yaxis": f"y{axis_idx}" if axis_idx > 1 else "y",
-                    "showlegend": False,
-                    "hovertemplate": f"Capacity: %{{y:.2f}} MB<extra></extra>",
+                    "visible": (mem_type == "DRAM"),
+                    "showlegend": True,
+                    "legendgroup": "capacity",
+                    "hovertemplate": f"{mem_type} Capacity: %{{y:.2f}} MB/bank<extra></extra>",
+                }
+            )
+            trace_mem_type.append(mem_type)
+
+        # Build visibility arrays for each button
+        buttons = []
+        for mem_type in display_types:
+            visibility = [mt == mem_type for mt in trace_mem_type]
+            buttons.append(
+                {
+                    "label": mem_type,
+                    "method": "update",
+                    "args": [
+                        {"visible": visibility},
+                        {"yaxis.title": f"{mem_type} (MB/bank)"},
+                    ],
                 }
             )
 
-        # Build dynamic layout based on available memory types
-        num_types = len(memory_types)
-        row_height = 0.225
-        gap = 0.05
         layout = {
-            "height": 300 * num_types,
+            "height": 450,
             "showlegend": True,
             "title": {
                 "text": "Memory Usage Across Operation Execution",
                 "font": {"size": 18},
             },
-            "grid": {"rows": num_types, "columns": 1, "pattern": "independent"},
+            "xaxis": {"title": "Operation Index"},
+            "yaxis": {"title": "DRAM (MB/bank)"},
+            "updatemenus": [
+                {
+                    "type": "buttons",
+                    "direction": "right",
+                    "active": 0,  # DRAM is default
+                    "x": 0.0,
+                    "xanchor": "left",
+                    "y": 1.15,
+                    "yanchor": "top",
+                    "buttons": buttons,
+                    "showactive": True,
+                    "bgcolor": "#f0f0f0",
+                    "bordercolor": "#ccc",
+                    "font": {"size": 12},
+                }
+            ],
+            "legend": {
+                "orientation": "h",
+                "yanchor": "bottom",
+                "y": 1.02,
+                "xanchor": "right",
+                "x": 1,
+            },
         }
-
-        for i, mem_type in enumerate(memory_types):
-            axis_idx = i + 1
-            xkey = "xaxis" if axis_idx == 1 else f"xaxis{axis_idx}"
-            ykey = "yaxis" if axis_idx == 1 else f"yaxis{axis_idx}"
-            # Calculate domain from top to bottom
-            top = 1.0 - i * (row_height + gap)
-            bottom = top - row_height
-            layout[xkey] = {
-                "title": "Operation Index",
-                "anchor": f"y{axis_idx}" if axis_idx > 1 else "y",
-            }
-            layout[ykey] = {
-                "title": f"{mem_type} (MB/bank)",
-                "domain": [max(0, bottom), top],
-            }
 
         return {"traces": traces, "layout": layout}
 
@@ -945,3 +969,251 @@ class MemoryVisualizer:
         }
 
         return {"traces": traces, "layout": layout}
+
+    def _prepare_unpadded_comparison_data(self) -> Dict:
+        """Prepare data for unpadded vs padded memory comparison graph.
+
+        Shows three lines:
+        - Blue: Unpadded (logical) memory - theoretical minimum
+        - Orange: Padded (tile-aligned) memory - calculated from tensor layouts
+        - Green dashed: Actual allocated memory - from runtime
+        """
+        # Check if unpadded_memory data is available
+        if not self.mem_data or not self.mem_data[0].get("unpadded_memory"):
+            return {"traces": [], "layout": {}}
+
+        indices = []
+        unpadded_dram = []
+        padded_dram = []
+        op_names = []
+
+        for i, op in enumerate(self.mem_data):
+            unpadded = op.get("unpadded_memory", {})
+            if not unpadded:
+                continue
+
+            indices.append(op["index"])
+
+            # Get DRAM values
+            dram_unpadded = unpadded.get("DRAM", {})
+            unpadded_dram.append(dram_unpadded.get("unpadded_MB", 0))
+            padded_dram.append(dram_unpadded.get("padded_MB", 0))
+
+            # Get op name for hover
+            if i < len(self.ops_data):
+                op_names.append(self.ops_data[i].get("mlir_op", "unknown"))
+            else:
+                op_names.append(op.get("mlir_op", "unknown"))
+
+        if not indices:
+            return {"traces": [], "layout": {}}
+
+        # Build customdata for hover
+        customdata = list(zip(op_names, unpadded_dram, padded_dram))
+
+        traces = [
+            {
+                "x": indices,
+                "y": unpadded_dram,
+                "type": "scatter",
+                "mode": "lines",
+                "name": "Unpadded (Logical)",
+                "line": {"width": 2, "color": "#1f77b4"},  # Blue
+                "customdata": customdata,
+                "hovertemplate": "Op %{x}: %{customdata[0]}<br>Unpadded: %{customdata[1]:.2f} MB<br>Padded: %{customdata[2]:.2f} MB<extra></extra>",
+            },
+            {
+                "x": indices,
+                "y": padded_dram,
+                "type": "scatter",
+                "mode": "lines",
+                "name": "Padded (Tile-Aligned)",
+                "line": {"width": 2, "color": "#ff7f0e"},  # Orange
+                "hoverinfo": "skip",
+            },
+        ]
+
+        # Calculate peak overhead for title
+        peak_overhead_pct = 0
+        for i in range(len(unpadded_dram)):
+            if unpadded_dram[i] > 0:
+                overhead = (padded_dram[i] - unpadded_dram[i]) / unpadded_dram[i] * 100
+                peak_overhead_pct = max(peak_overhead_pct, overhead)
+
+        layout = {
+            "height": 400,
+            "showlegend": True,
+            "title": {
+                "text": f"Tile Padding Memory Overhead (DRAM) - Peak: {peak_overhead_pct:.1f}%",
+                "font": {"size": 16},
+            },
+            "xaxis": {"title": "Operation Index"},
+            "yaxis": {"title": "Total Memory (MB)", "rangemode": "tozero"},
+            "hovermode": "x",
+        }
+
+        return {"traces": traces, "layout": layout}
+
+    def _calculate_peak_padding_overhead(self) -> Dict:
+        """Calculate peak tile padding overhead from memory data."""
+        if not self.mem_data or not self.mem_data[0].get("unpadded_memory"):
+            return {"dram_pct": 0, "l1_pct": 0, "has_data": False}
+
+        peak_dram_pct = 0
+        peak_l1_pct = 0
+
+        for op in self.mem_data:
+            unpadded = op.get("unpadded_memory", {})
+            if unpadded:
+                dram = unpadded.get("DRAM", {})
+                l1 = unpadded.get("L1", {})
+                peak_dram_pct = max(peak_dram_pct, dram.get("overhead_pct", 0))
+                peak_l1_pct = max(peak_l1_pct, l1.get("overhead_pct", 0))
+
+        return {
+            "dram_pct": peak_dram_pct,
+            "l1_pct": peak_l1_pct,
+            "has_data": True,
+        }
+
+    def _format_padding_overhead_card(self, peak_padding_overhead: Dict) -> str:
+        """Format padding overhead summary card."""
+        if not peak_padding_overhead or not peak_padding_overhead.get("has_data"):
+            return ""
+
+        dram_pct = peak_padding_overhead.get("dram_pct", 0)
+        return f"""
+            <div class="summary-card" style="background: linear-gradient(135deg, #8B0000 0%, #FF4500 100%);">
+                <div class="label">Peak Tile Padding Overhead</div>
+                <div class="value">{dram_pct:.1f}%</div>
+            </div>"""
+
+    def _format_tile_padding_section(self, top_padding_ops: List[Dict]) -> str:
+        """Format the tile padding analysis section."""
+        if not self.mem_data or not self.mem_data[0].get("unpadded_memory"):
+            return ""
+
+        table_html = self._generate_top_padding_ops_table_html(top_padding_ops)
+
+        return f"""
+        <!-- Tile Padding Memory Overhead -->
+        <h2>Tile Padding Memory Overhead (DRAM)</h2>
+        <p style="color: #666; margin-bottom: 15px;">
+            Shows actual allocated memory vs theoretical minimum without 32x32 tile alignment.
+        </p>
+        <div class="graph-container">
+            <div id="unpadded-comparison-graph"></div>
+        </div>
+
+        <h3>Top 10 Operations by Absolute Padding Overhead</h3>
+        {table_html}
+        """
+
+    def get_top_padding_overhead_ops(self, n: int = 10) -> List[Dict]:
+        """Get top N operations with highest absolute tile padding overhead.
+
+        Returns operations where the output tensor has significant padding overhead,
+        sorted by absolute overhead in bytes (padded - unpadded).
+        """
+        ops_with_overhead = []
+
+        for i, op in enumerate(self.ops_data):
+            layout_info = op.get("output_layout_info")
+            if not layout_info:
+                continue
+
+            overhead_pct = layout_info.get("overhead_pct", 0)
+            if overhead_pct <= 0:
+                continue
+
+            # Calculate absolute overhead in bytes
+            padded_bytes = layout_info.get("padded_bytes", 0)
+            unpadded_bytes = layout_info.get("unpadded_bytes", 0)
+            absolute_overhead = padded_bytes - unpadded_bytes
+
+            ops_with_overhead.append(
+                {
+                    "index": i,
+                    "operation": op,
+                    "layout_info": layout_info,
+                    "overhead_pct": overhead_pct,
+                    "absolute_overhead_bytes": absolute_overhead,
+                }
+            )
+
+        # Sort by absolute overhead in bytes descending
+        ops_with_overhead.sort(key=lambda x: x["absolute_overhead_bytes"], reverse=True)
+        return ops_with_overhead[:n]
+
+    def _generate_top_padding_ops_table_html(self, top_ops: List[Dict]) -> str:
+        """Generate HTML table for top padding overhead operations."""
+        if not top_ops:
+            return "<p>No operations with tile padding overhead found.</p>"
+
+        rows = []
+        for rank, item in enumerate(top_ops, 1):
+            op = item["operation"]
+            layout = item["layout_info"]
+            idx = item["index"]
+
+            logical_shape = "x".join(str(d) for d in layout.get("logical_shape", []))
+            padded_shape = "x".join(str(d) for d in layout.get("padded_shape", []))
+            dtype = layout.get("dtype", "?")
+            unpadded_bytes = layout.get("unpadded_bytes", 0)
+            padded_bytes = layout.get("padded_bytes", 0)
+            overhead_pct = layout.get("overhead_pct", 0)
+            absolute_overhead = padded_bytes - unpadded_bytes
+
+            # Format absolute overhead (always in MB for consistency)
+            overhead_mb = absolute_overhead / (1024 * 1024)
+            overhead_mb_str = f"{overhead_mb:.2f} MB"
+
+            # Format sizes
+            if unpadded_bytes >= 1024 * 1024:
+                unpadded_str = f"{unpadded_bytes / (1024*1024):.2f} MB"
+            elif unpadded_bytes >= 1024:
+                unpadded_str = f"{unpadded_bytes / 1024:.1f} KB"
+            else:
+                unpadded_str = f"{unpadded_bytes} B"
+
+            if padded_bytes >= 1024 * 1024:
+                padded_str = f"{padded_bytes / (1024*1024):.2f} MB"
+            elif padded_bytes >= 1024:
+                padded_str = f"{padded_bytes / 1024:.1f} KB"
+            else:
+                padded_str = f"{padded_bytes} B"
+
+            rows.append(
+                f"""
+            <tr>
+                <td>{rank}</td>
+                <td>{idx}</td>
+                <td><span class="code">{op['mlir_op']}</span></td>
+                <td><span class="code">{logical_shape} ({dtype})</span></td>
+                <td><span class="code">{padded_shape}</span></td>
+                <td>{unpadded_str}</td>
+                <td>{padded_str}</td>
+                <td style="font-weight: bold;">{overhead_mb_str}</td>
+                <td style="color: {'red' if overhead_pct > 100 else 'orange' if overhead_pct > 50 else 'inherit'};">{overhead_pct:.1f}%</td>
+            </tr>"""
+            )
+
+        return f"""
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Index</th>
+                    <th>Operation</th>
+                    <th>Logical Shape</th>
+                    <th>Padded Shape</th>
+                    <th>Unpadded</th>
+                    <th>Padded</th>
+                    <th>Overhead (MB)</th>
+                    <th>Overhead (%)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(rows)}
+            </tbody>
+        </table>"""

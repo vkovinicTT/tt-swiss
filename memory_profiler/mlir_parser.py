@@ -11,6 +11,28 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 
+# Dtype sizes in bytes
+DTYPE_SIZES = {
+    "bf16": 2,
+    "f16": 2,
+    "f32": 4,
+    "f64": 8,
+    "i8": 1,
+    "i16": 2,
+    "i32": 4,
+    "i64": 8,
+    "si8": 1,
+    "si16": 2,
+    "si32": 4,
+    "si64": 8,
+    "ui8": 1,
+    "ui16": 2,
+    "ui32": 4,
+    "ui64": 8,
+    "bool": 1,
+}
+
+
 def parse_tensor_type(type_str: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Extract shape and dtype from a tensor type string.
@@ -48,6 +70,127 @@ def parse_tensor_type(type_str: str) -> Tuple[Optional[str], Optional[str]]:
         return None, inner
 
     return None, None
+
+
+def parse_tensor_layout_info(type_str: str) -> Optional[Dict]:
+    """
+    Extract layout information from a tensor type string.
+
+    Example input:
+    tensor<64x128xf32, #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>,
+           memref<2x4x!ttcore.tile<32x32, f32>, #ttnn.buffer_type<dram>>, <interleaved>>>
+
+    Returns:
+        {
+            "logical_shape": [64, 128],
+            "dtype": "f32",
+            "is_tiled": True,
+            "memref_shape": [2, 4],  # Number of tiles
+            "tile_size": [32, 32],
+            "padded_shape": [64, 128],  # memref * tile_size
+            "buffer_type": "dram",
+            "unpadded_bytes": 32768,  # 64*128*4
+            "padded_bytes": 32768,    # 64*128*4 (no overhead here)
+            "overhead_pct": 0.0
+        }
+        Returns None if parsing fails.
+    """
+    if not type_str:
+        return None
+
+    result = {}
+
+    # Extract logical shape and dtype from tensor<NxMx...dtype, ...>
+    shape_str, dtype = parse_tensor_type(type_str)
+    if not shape_str or not dtype:
+        return None
+
+    # Parse logical shape dimensions
+    try:
+        logical_shape = [int(d) for d in shape_str.split("x")]
+    except ValueError:
+        return None
+
+    result["logical_shape"] = logical_shape
+    result["dtype"] = dtype
+
+    # Get dtype size
+    dtype_size = DTYPE_SIZES.get(dtype, 4)
+
+    # Calculate unpadded bytes
+    unpadded_elements = 1
+    for d in logical_shape:
+        unpadded_elements *= d
+    result["unpadded_bytes"] = unpadded_elements * dtype_size
+
+    # Check if this is a tiled layout by looking for memref and tile patterns
+    # Pattern: memref<AxBx!ttcore.tile<H,W, dtype>...> or memref<AxBx!tt.tile<H,W, dtype>...>
+    memref_match = re.search(
+        r"memref<([\dx]+)x!(?:ttcore|tt)\.tile<(\d+)x(\d+),\s*(\w+)>", type_str
+    )
+
+    if memref_match:
+        result["is_tiled"] = True
+
+        # Parse memref shape (tile counts)
+        memref_shape_str = memref_match.group(1)
+        tile_h = int(memref_match.group(2))
+        tile_w = int(memref_match.group(3))
+        memref_dtype = memref_match.group(4)
+
+        try:
+            memref_shape = [int(d) for d in memref_shape_str.split("x")]
+        except ValueError:
+            memref_shape = []
+
+        result["memref_shape"] = memref_shape
+        result["tile_size"] = [tile_h, tile_w]
+
+        # Calculate padded shape: for each tile dimension, multiply by tile size
+        # The physical shape is memref_shape * tile_size for the last two dims
+        # For 1D tensors: memref is 1xN tiles of 32x32, so padded is 32 x (N*32)
+        if len(memref_shape) >= 2:
+            # Last two memref dims correspond to tile grid
+            padded_shape = memref_shape[:-2] + [
+                memref_shape[-2] * tile_h,
+                memref_shape[-1] * tile_w,
+            ]
+        elif len(memref_shape) == 1:
+            # Single dim - interpret as Nx1 tile grid
+            padded_shape = [tile_h, memref_shape[0] * tile_w]
+        else:
+            padded_shape = [tile_h, tile_w]
+
+        result["padded_shape"] = padded_shape
+
+        # Calculate padded bytes
+        padded_elements = 1
+        for d in padded_shape:
+            padded_elements *= d
+        result["padded_bytes"] = padded_elements * dtype_size
+    else:
+        # Not a tiled layout (row-major or scalar)
+        result["is_tiled"] = False
+        result["memref_shape"] = None
+        result["tile_size"] = None
+        result["padded_shape"] = logical_shape.copy()
+        result["padded_bytes"] = result["unpadded_bytes"]
+
+    # Extract buffer type from #ttnn.buffer_type<...>
+    buffer_match = re.search(r"#ttnn\.buffer_type<(\w+)>", type_str)
+    if buffer_match:
+        result["buffer_type"] = buffer_match.group(1).lower()
+    else:
+        result["buffer_type"] = None
+
+    # Calculate overhead percentage
+    if result["padded_bytes"] > 0:
+        overhead_bytes = result["padded_bytes"] - result["unpadded_bytes"]
+        result["overhead_pct"] = (overhead_bytes / result["unpadded_bytes"]) * 100
+    else:
+        result["overhead_pct"] = 0.0
+
+    return result
 
 
 def parse_type_string(type_str: str) -> List[Dict]:
@@ -191,6 +334,9 @@ def parse_mlir_operation(line: str) -> Optional[Dict]:
     input_tensors = parse_type_string(input_types_str)
     output_tensors = parse_type_string(output_type_str)
 
+    # Parse output layout info for unpadded memory analysis
+    output_layout_info = parse_tensor_layout_info(output_type_str)
+
     return {
         "result": result,
         "mlir_op": mlir_op,
@@ -202,5 +348,6 @@ def parse_mlir_operation(line: str) -> Optional[Dict]:
         "input_dtypes": [t["dtype"] for t in input_tensors],
         "output_shapes": [t["shape"] for t in output_tensors],
         "output_dtypes": [t["dtype"] for t in output_tensors],
+        "output_layout_info": output_layout_info,
         "loc": location,
     }
