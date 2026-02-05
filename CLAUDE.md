@@ -50,6 +50,14 @@ python memory_profiler/generate_viz.py ~/.ttmem/reports/<report-name>/
 6. **inputs_registry_parser.py** - Extracts function argument registry (parameters/constants/inputs) from MLIR module dumps
 7. **visualizer.py** - Generates interactive HTML reports with Plotly.js
 
+### Visualization Sections
+
+The HTML report includes:
+- **Memory Usage Over Time**: Tab-selectable graph (DRAM/L1/L1_SMALL buttons) showing allocated memory, weight ops (red markers), and capacity line
+- **Tile Padding Overhead**: Graph comparing unpadded (logical) vs padded (tile-aligned) memory in total MB; table of top 10 ops sorted by absolute overhead in MB
+- **Peak Memory Analysis**: Cards showing peak usage per memory type with operation details
+- **Top Memory Consumers**: Table of operations with highest DRAM allocation
+
 ### Key Design Patterns
 
 - **Synchronized JSON outputs**: The nth element in `memory.json` corresponds to the nth element in `operations.json`
