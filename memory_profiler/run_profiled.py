@@ -87,6 +87,7 @@ def analyze_log(log_file: Path, output_dir: Path, script_name: str):
     mem_json = output_dir / f"{script_name}_memory.json"
     ops_json = output_dir / f"{script_name}_operations.json"
     registry_json = output_dir / f"{script_name}_inputs_registry.json"
+    ir_json = output_dir / f"{script_name}_ir.json"
 
     try:
         from memory_profiler.parser import parse_log_file, validate_outputs
@@ -95,7 +96,7 @@ def analyze_log(log_file: Path, output_dir: Path, script_name: str):
         print("\n" + "=" * 70)
         print("Parsing logs...")
         print("=" * 70)
-        parse_log_file(str(log_file), str(mem_json), str(ops_json), str(registry_json))
+        parse_log_file(str(log_file), str(mem_json), str(ops_json), str(registry_json), str(ir_json))
 
         # Validate outputs
         print("\n" + "=" * 70)
@@ -110,8 +111,9 @@ def analyze_log(log_file: Path, output_dir: Path, script_name: str):
         print(f"  - {mem_json}")
         print(f"  - {ops_json}")
         print(f"  - {registry_json}")
+        print(f"  - {ir_json}")
 
-        return mem_json, ops_json, registry_json
+        return mem_json, ops_json, registry_json, ir_json
 
     except ImportError as e:
         print(f"Error: Could not import parser module: {e}")

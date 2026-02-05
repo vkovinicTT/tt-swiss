@@ -46,6 +46,7 @@ class MemoryVisualizer:
         self.mem_file = self.run_dir / f"{self.script_name}_memory.json"
         self.ops_file = self.run_dir / f"{self.script_name}_operations.json"
         self.registry_file = self.run_dir / f"{self.script_name}_inputs_registry.json"
+        self.ir_file = self.run_dir / f"{self.script_name}_ir.json"
 
         # Load data
         with open(self.mem_file) as f:
@@ -58,6 +59,12 @@ class MemoryVisualizer:
         if self.registry_file.exists():
             with open(self.registry_file) as f:
                 self.registry = json.load(f)
+
+        # Load IR data if it exists
+        self.ir_data = None
+        if self.ir_file.exists():
+            with open(self.ir_file) as f:
+                self.ir_data = json.load(f)
 
         # Handle both old format (list) and new format (dict with metadata)
         if isinstance(mem_json, dict) and "metadata" in mem_json:
@@ -107,6 +114,58 @@ class MemoryVisualizer:
         output_path.write_text(html)
         return output_path
 
+    def _has_ir_data(self) -> bool:
+        """Check if IR data is available and non-empty."""
+        if not self.ir_data:
+            return False
+        ttir = self.ir_data.get("ttir", {})
+        ttnn = self.ir_data.get("ttnn", {})
+        return bool(ttir.get("text") or ttnn.get("text"))
+
+    def _escape_html(self, text: str) -> str:
+        """Escape HTML special characters."""
+        return (
+            text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&#39;")
+        )
+
+    def _format_op_link(self, mlir_op: str, loc: str) -> str:
+        """Format an operation name as a clickable link to IR if loc is available."""
+        if not loc or not self._has_ir_data():
+            return f'<span class="code">{self._escape_html(mlir_op)}</span>'
+
+        # Make the operation clickable - links to TTNN by default (most useful)
+        return f'<a href="#" class="op-link code" data-loc="{self._escape_html(loc)}" onclick="navigateToIR(\'{self._escape_html(loc)}\', \'ttnn\'); return false;">{self._escape_html(mlir_op)}</a>'
+
+    def _generate_ir_html(self, ir_name: str) -> str:
+        """Generate HTML for displaying an IR module with line numbers."""
+        if not self.ir_data:
+            return '<div class="ir-empty">No IR data available</div>'
+
+        ir_info = self.ir_data.get(ir_name, {})
+        ir_text = ir_info.get("text", "")
+
+        if not ir_text:
+            return f'<div class="ir-empty">No {ir_name.upper()} IR data available</div>'
+
+        lines = ir_text.split("\n")
+        html_lines = []
+
+        for line_num, line in enumerate(lines, start=1):
+            escaped_line = self._escape_html(line)
+            # Add id for scrolling to specific lines
+            html_lines.append(
+                f'<div class="ir-line" id="{ir_name}-line-{line_num}">'
+                f'<span class="line-num">{line_num}</span>'
+                f'<span class="line-content">{escaped_line}</span>'
+                f'</div>'
+            )
+
+        return "\n".join(html_lines)
+
     def _build_html(
         self,
         summary_stats: Dict,
@@ -115,11 +174,20 @@ class MemoryVisualizer:
         top_padding_ops: List[Dict] = None,
         peak_padding_overhead: Dict = None,
     ) -> str:
-        """Build complete HTML document with embedded Plotly graphs"""
+        """Build complete HTML document with embedded Plotly graphs and IR viewer"""
 
         # Prepare data for JavaScript
         memory_graph_data = self._prepare_memory_graph_data()
         unpadded_comparison_data = self._prepare_unpadded_comparison_data()
+
+        # Prepare IR location indices for JavaScript
+        ir_loc_index = {"ttir": {}, "ttnn": {}}
+        if self.ir_data:
+            ir_loc_index["ttir"] = self.ir_data.get("ttir", {}).get("loc_index", {})
+            ir_loc_index["ttnn"] = self.ir_data.get("ttnn", {}).get("loc_index", {})
+
+        has_ir = self._has_ir_data()
+        irs_tab_style = "" if has_ir else "display: none;"
 
         html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -133,8 +201,75 @@ class MemoryVisualizer:
         body {{
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: #f5f5f5;
+        }}
+
+        /* App layout with sidebar */
+        .app-container {{
+            display: flex;
+            min-height: 100vh;
+        }}
+
+        /* Sidebar styles */
+        .sidebar {{
+            width: 220px;
+            background: #1a1a2e;
+            color: white;
+            padding: 20px 0;
+            flex-shrink: 0;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+        }}
+        .sidebar-header {{
+            padding: 0 20px 20px;
+            border-bottom: 1px solid #333;
+            margin-bottom: 20px;
+        }}
+        .sidebar-header h2 {{
+            font-size: 18px;
+            color: #4CAF50;
+            margin: 0;
+        }}
+        .sidebar-nav {{
+            list-style: none;
+        }}
+        .sidebar-nav li {{
+            margin: 5px 0;
+        }}
+        .sidebar-nav a {{
+            display: block;
+            padding: 12px 20px;
+            color: #ccc;
+            text-decoration: none;
+            transition: all 0.2s;
+            border-left: 3px solid transparent;
+        }}
+        .sidebar-nav a:hover {{
+            background: rgba(255,255,255,0.1);
+            color: white;
+        }}
+        .sidebar-nav a.active {{
+            background: rgba(76, 175, 80, 0.2);
+            color: #4CAF50;
+            border-left-color: #4CAF50;
+        }}
+
+        /* Main content area */
+        .main-content {{
+            flex: 1;
+            margin-left: 220px;
             padding: 20px;
         }}
+
+        /* View containers */
+        .view {{
+            display: none;
+        }}
+        .view.active {{
+            display: block;
+        }}
+
+        /* Summary view container */
         .container {{
             max-width: 1400px;
             margin: 0 auto;
@@ -274,57 +409,179 @@ class MemoryVisualizer:
         .badge.l1 {{ background: #2196F3; color: white; }}
         .badge.l1-small {{ background: #9C27B0; color: white; }}
         .badge.trace {{ background: #607D8B; color: white; }}
+
+        /* Operation link styles */
+        .op-link {{
+            color: #2196F3;
+            text-decoration: none;
+            cursor: pointer;
+        }}
+        .op-link:hover {{
+            text-decoration: underline;
+            color: #1976D2;
+        }}
+
+        /* IR View styles */
+        .ir-view-container {{
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }}
+        .ir-tabs {{
+            display: flex;
+            background: #333;
+            padding: 0;
+        }}
+        .ir-tab {{
+            padding: 15px 30px;
+            color: #aaa;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }}
+        .ir-tab:hover {{
+            color: white;
+            background: rgba(255,255,255,0.1);
+        }}
+        .ir-tab.active {{
+            color: #4CAF50;
+            background: #1a1a2e;
+        }}
+        .ir-content {{
+            display: none;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            max-height: calc(100vh - 150px);
+            overflow: auto;
+        }}
+        .ir-content.active {{
+            display: block;
+        }}
+        .ir-line {{
+            display: flex;
+            padding: 0 15px;
+        }}
+        .ir-line:hover {{
+            background: rgba(255,255,255,0.05);
+        }}
+        .ir-line.highlighted {{
+            background: rgba(76, 175, 80, 0.3);
+            animation: highlight-pulse 1s ease-out;
+        }}
+        @keyframes highlight-pulse {{
+            0% {{ background: rgba(76, 175, 80, 0.6); }}
+            100% {{ background: rgba(76, 175, 80, 0.3); }}
+        }}
+        .line-num {{
+            color: #666;
+            min-width: 50px;
+            text-align: right;
+            padding-right: 15px;
+            user-select: none;
+            border-right: 1px solid #333;
+            margin-right: 15px;
+        }}
+        .line-content {{
+            white-space: pre;
+        }}
+        .ir-empty {{
+            padding: 40px;
+            text-align: center;
+            color: #888;
+            font-size: 16px;
+        }}
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Memory Profiling Report</h1>
-        <div class="metadata">
-            <strong>Run:</strong> {self.run_dir.name}<br>
-            <strong>Generated:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}<br>
-            <strong>Total Operations:</strong> {len(self.mem_data)} (deallocations excluded)<br>
-            {self._format_memory_config()}
-        </div>
-
-        <!-- Summary Statistics -->
-        <h2>Summary Statistics</h2>
-        <div class="summary-grid">
-            <div class="summary-card">
-                <div class="label">Total Operations</div>
-                <div class="value">{summary_stats['total_ops']}</div>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h2>Memory Profiler</h2>
             </div>
-            <div class="summary-card green">
-                <div class="label">Peak DRAM Usage</div>
-                <div class="value">{summary_stats['memory_types']['DRAM']['peak']:.1f} MB</div>
+            <ul class="sidebar-nav">
+                <li><a href="#" class="active" onclick="showView('summary'); return false;">Summary</a></li>
+                <li style="{irs_tab_style}"><a href="#" onclick="showView('irs'); return false;">IRs</a></li>
+            </ul>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Summary View -->
+            <div id="summary-view" class="view active">
+                <div class="container">
+                    <h1>Memory Profiling Report</h1>
+                    <div class="metadata">
+                        <strong>Run:</strong> {self.run_dir.name}<br>
+                        <strong>Generated:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}<br>
+                        <strong>Total Operations:</strong> {len(self.mem_data)} (deallocations excluded)<br>
+                        {self._format_memory_config()}
+                    </div>
+
+                    <!-- Summary Statistics -->
+                    <h2>Summary Statistics</h2>
+                    <div class="summary-grid">
+                        <div class="summary-card">
+                            <div class="label">Total Operations</div>
+                            <div class="value">{summary_stats['total_ops']}</div>
+                        </div>
+                        <div class="summary-card green">
+                            <div class="label">Peak DRAM Usage</div>
+                            <div class="value">{summary_stats['memory_types']['DRAM']['peak']:.1f} MB</div>
+                        </div>
+                        <div class="summary-card blue">
+                            <div class="label">Peak L1 Usage</div>
+                            <div class="value">{summary_stats['memory_types']['L1']['peak']:.2f} MB</div>
+                        </div>
+                        <div class="summary-card orange">
+                            <div class="label">Avg DRAM Usage</div>
+                            <div class="value">{summary_stats['memory_types']['DRAM']['avg']:.1f} MB</div>
+                        </div>
+                        {self._format_weight_summary_card()}
+                        {self._format_padding_overhead_card(peak_padding_overhead)}
+                    </div>
+
+                    <!-- Memory Usage Over Time -->
+                    <h2>Memory Usage Over Time</h2>
+                    <div class="graph-container">
+                        <div id="memory-graphs"></div>
+                    </div>
+
+                    {self._format_tile_padding_section(top_padding_ops)}
+
+                    <!-- Peak Memory Analysis -->
+                    <h2>Peak Memory Analysis</h2>
+                    {self._generate_peak_cards_html(peak_analysis)}
+
+                    <!-- Top Memory Consumers -->
+                    <h2>Top 10 Memory-Consuming Operations</h2>
+                    {self._generate_top_ops_table_html(top_ops)}
+                </div>
             </div>
-            <div class="summary-card blue">
-                <div class="label">Peak L1 Usage</div>
-                <div class="value">{summary_stats['memory_types']['L1']['peak']:.2f} MB</div>
+
+            <!-- IRs View -->
+            <div id="irs-view" class="view">
+                <div class="ir-view-container">
+                    <div class="ir-tabs">
+                        <button class="ir-tab active" onclick="showIRTab('ttir')">TTIR</button>
+                        <button class="ir-tab" onclick="showIRTab('ttnn')">TTNN</button>
+                    </div>
+                    <div id="ttir-content" class="ir-content active">
+                        {self._generate_ir_html('ttir')}
+                    </div>
+                    <div id="ttnn-content" class="ir-content">
+                        {self._generate_ir_html('ttnn')}
+                    </div>
+                </div>
             </div>
-            <div class="summary-card orange">
-                <div class="label">Avg DRAM Usage</div>
-                <div class="value">{summary_stats['memory_types']['DRAM']['avg']:.1f} MB</div>
-            </div>
-            {self._format_weight_summary_card()}
-            {self._format_padding_overhead_card(peak_padding_overhead)}
-        </div>
-
-        <!-- Memory Usage Over Time -->
-        <h2>Memory Usage Over Time</h2>
-        <div class="graph-container">
-            <div id="memory-graphs"></div>
-        </div>
-
-        {self._format_tile_padding_section(top_padding_ops)}
-
-        <!-- Peak Memory Analysis -->
-        <h2>Peak Memory Analysis</h2>
-        {self._generate_peak_cards_html(peak_analysis)}
-
-        <!-- Top Memory Consumers -->
-        <h2>Top 10 Memory-Consuming Operations</h2>
-        {self._generate_top_ops_table_html(top_ops)}
-
+        </main>
     </div>
 
     <script>
@@ -332,13 +589,97 @@ class MemoryVisualizer:
         const memoryData = {json.dumps(memory_graph_data)};
         const unpaddedComparisonData = {json.dumps(unpadded_comparison_data)};
 
-        // Create memory usage over time graphs
-        Plotly.newPlot('memory-graphs', memoryData.traces, memoryData.layout, {{responsive: true}});
+        // IR location indices for navigation
+        const irLocIndex = {json.dumps(ir_loc_index)};
 
-        // Create unpadded comparison graph if data available
-        if (unpaddedComparisonData && unpaddedComparisonData.traces && unpaddedComparisonData.traces.length > 0) {{
-            Plotly.newPlot('unpadded-comparison-graph', unpaddedComparisonData.traces, unpaddedComparisonData.layout, {{responsive: true}});
+        // Track current highlighted line
+        let currentHighlightedLine = null;
+
+        // View switching
+        function showView(viewName) {{
+            // Hide all views
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            // Show selected view
+            document.getElementById(viewName + '-view').classList.add('active');
+            // Update nav
+            document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // Resize plots when switching to summary view
+            if (viewName === 'summary') {{
+                setTimeout(() => {{
+                    Plotly.Plots.resize('memory-graphs');
+                    const unpaddedGraph = document.getElementById('unpadded-comparison-graph');
+                    if (unpaddedGraph) {{
+                        Plotly.Plots.resize('unpadded-comparison-graph');
+                    }}
+                }}, 100);
+            }}
         }}
+
+        // IR tab switching
+        function showIRTab(irType) {{
+            // Update tabs
+            document.querySelectorAll('.ir-tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            // Update content
+            document.querySelectorAll('.ir-content').forEach(c => c.classList.remove('active'));
+            document.getElementById(irType + '-content').classList.add('active');
+        }}
+
+        // Navigate to specific line in IR
+        function navigateToIR(loc, preferredIR) {{
+            // Remove previous highlight
+            if (currentHighlightedLine) {{
+                currentHighlightedLine.classList.remove('highlighted');
+            }}
+
+            // Try to find the line in preferred IR first, then fall back to other
+            let irType = preferredIR;
+            let lineNum = irLocIndex[irType][loc];
+
+            if (!lineNum) {{
+                // Try the other IR type
+                irType = preferredIR === 'ttnn' ? 'ttir' : 'ttnn';
+                lineNum = irLocIndex[irType][loc];
+            }}
+
+            if (!lineNum) {{
+                console.warn('Location not found in IR:', loc);
+                return;
+            }}
+
+            // Switch to IRs view
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.getElementById('irs-view').classList.add('active');
+            document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
+            document.querySelectorAll('.sidebar-nav a')[1].classList.add('active');
+
+            // Switch to correct IR tab
+            document.querySelectorAll('.ir-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.ir-tab')[irType === 'ttir' ? 0 : 1].classList.add('active');
+            document.querySelectorAll('.ir-content').forEach(c => c.classList.remove('active'));
+            document.getElementById(irType + '-content').classList.add('active');
+
+            // Scroll to and highlight the line
+            const lineElement = document.getElementById(irType + '-line-' + lineNum);
+            if (lineElement) {{
+                lineElement.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                lineElement.classList.add('highlighted');
+                currentHighlightedLine = lineElement;
+            }}
+        }}
+
+        // Initialize plots
+        document.addEventListener('DOMContentLoaded', function() {{
+            // Create memory usage over time graphs
+            Plotly.newPlot('memory-graphs', memoryData.traces, memoryData.layout, {{responsive: true}});
+
+            // Create unpadded comparison graph if data available
+            if (unpaddedComparisonData && unpaddedComparisonData.traces && unpaddedComparisonData.traces.length > 0) {{
+                Plotly.newPlot('unpadded-comparison-graph', unpaddedComparisonData.traces, unpaddedComparisonData.layout, {{responsive: true}});
+            }}
+        }});
     </script>
 </body>
 </html>"""
@@ -676,12 +1017,15 @@ class MemoryVisualizer:
             input_str = self._format_shapes_with_dtypes(input_shapes, input_dtypes)
             output_str = self._format_shapes_with_dtypes(output_shapes, output_dtypes)
 
+            # Format operation as clickable link
+            op_link = self._format_op_link(op['mlir_op'], op.get('loc'))
+
             html_parts.append(
                 f"""
         <div class="peak-card" style="border-left-color: {color};">
             <h3><span class="badge {mem_type.lower().replace('_', '-')}">{mem_type}</span> Peak: {peak_val:.2f} MB/bank at Operation #{data['index']}</h3>
             <table>
-                <tr><td>Operation</td><td><span class="code">{op['mlir_op']}</span></td></tr>
+                <tr><td>Operation</td><td>{op_link}</td></tr>
                 <tr><td>Location</td><td><span class="code">{op['loc']}</span></td></tr>
                 <tr><td>Input Shapes</td><td><span class="code">{input_str}</span></td></tr>
                 <tr><td>Output Shapes</td><td><span class="code">{output_str}</span></td></tr>
@@ -711,12 +1055,15 @@ class MemoryVisualizer:
             input_str = self._format_shapes_with_dtypes(input_shapes, input_dtypes)
             output_str = self._format_shapes_with_dtypes(output_shapes, output_dtypes)
 
+            # Format operation as clickable link
+            op_link = self._format_op_link(op['mlir_op'], op.get('loc'))
+
             rows.append(
                 f"""
             <tr>
                 <td>{rank}</td>
                 <td>{idx}</td>
-                <td><span class="code">{op['mlir_op']}</span></td>
+                <td>{op_link}</td>
                 <td><span class="code">{op['loc']}</span></td>
                 <td>{dram:.2f}</td>
                 <td><span class="code">{input_str}</span></td>
@@ -1183,12 +1530,15 @@ class MemoryVisualizer:
             else:
                 padded_str = f"{padded_bytes} B"
 
+            # Format operation as clickable link
+            op_link = self._format_op_link(op['mlir_op'], op.get('loc'))
+
             rows.append(
                 f"""
             <tr>
                 <td>{rank}</td>
                 <td>{idx}</td>
-                <td><span class="code">{op['mlir_op']}</span></td>
+                <td>{op_link}</td>
                 <td><span class="code">{logical_shape} ({dtype})</span></td>
                 <td><span class="code">{padded_shape}</span></td>
                 <td>{unpadded_str}</td>

@@ -14,10 +14,12 @@ from typing import Dict, List, Optional
 # Handle both package import and direct execution
 try:
     from .inputs_registry_parser import parse_inputs_registry
+    from .ir_parser import parse_ir_modules
     from .memory_parser import parse_memory_stats
     from .mlir_parser import parse_mlir_operation
 except ImportError:
     from inputs_registry_parser import parse_inputs_registry
+    from ir_parser import parse_ir_modules
     from memory_parser import parse_memory_stats
     from mlir_parser import parse_mlir_operation
 
@@ -75,6 +77,7 @@ def parse_log_file(
     mem_output: str,
     ops_output: str,
     registry_output: Optional[str] = None,
+    ir_output: Optional[str] = None,
 ) -> None:
     """
     Parse log file and generate synchronized JSON outputs.
@@ -84,6 +87,7 @@ def parse_log_file(
         mem_output: Path for memory statistics JSON output
         ops_output: Path for operation details JSON output
         registry_output: Optional path for inputs registry JSON output
+        ir_output: Optional path for IR modules JSON output (TTIR/TTNN)
     """
     operations = []
     memory_stats = []
@@ -411,6 +415,16 @@ def parse_log_file(
             print(f"Inputs registry written to: {registry_output}")
         except Exception as e:
             print(f"Error writing registry output: {e}", file=sys.stderr)
+
+    # Parse and write IR modules if requested
+    if ir_output:
+        try:
+            ir_data = parse_ir_modules(log_path)
+            with open(ir_output, "w", encoding="utf-8") as f:
+                json.dump(ir_data, f, indent=2)
+            print(f"IR modules written to: {ir_output}")
+        except Exception as e:
+            print(f"Error writing IR output: {e}", file=sys.stderr)
 
     # Count const_eval operations
     total_const_eval_ops = sum(const_eval_ops_count.values())

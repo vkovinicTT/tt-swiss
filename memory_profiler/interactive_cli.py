@@ -215,6 +215,7 @@ def process_log_file(log_path: str) -> Optional[Path]:
     mem_output = run_dir / f"{report_name}_memory.json"
     ops_output = run_dir / f"{report_name}_operations.json"
     registry_output = run_dir / f"{report_name}_inputs_registry.json"
+    ir_output = run_dir / f"{report_name}_ir.json"
 
     console.print()
     console.print(f"[dim]Output directory: {run_dir}[/dim]")
@@ -227,6 +228,7 @@ def process_log_file(log_path: str) -> Optional[Path]:
                 str(mem_output),
                 str(ops_output),
                 str(registry_output),
+                str(ir_output),
             )
         except Exception as e:
             console.print(f"[red]Error parsing log file: {e}[/red]")
