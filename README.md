@@ -1,32 +1,22 @@
 # TT Swiss - A swiss knife for model bringup 🇨🇭
 
 This repo is a collection of all of the useful tools for enabling models to work on TT hardware. This includes:
-1. Memory profiler `ttmem` - useful for look at memory usage of the model. Signs that you need this - errors like `Out of Memory: Not enough space to allocate <nbytes> B DRAM buffer across <nbanks> banks` 
+1. Memory profiler `ttmem` - useful for look at memory usage of the model. Signs that you need this - errors like `Out of Memory: Not enough space to allocate <nbytes> B DRAM buffer across <nbanks> banks`
 
-2. Claude skills and commands - We recommend you copy paste these in your `~/.claude` or `<tt-xla-path>/.claude` for easier debugging of models.
+2. Model analyzer `tt-model-analysis` - analyzes PyTorch models to identify which modules/ops work on TT hardware. Generates interactive HTML report showing pass/fail status for each module.
 
-## Memory profiler
+3. Claude skills and commands - We recommend you copy paste these in your `~/.claude` or `<tt-xla-path>/.claude` for easier debugging of models.
 
-### Quick start
+### Prerequisites
 
-```bash
-# Install from GitHub
-pip install git+https://github.com/vkovinicTT/tt-swiss.git
+Before using tt-swiss, you need to configure TT-XLA for memory logging and op by op testing:
 
-# Or install locally for development
-pip install -e /path/to/tt-swiss
-```
-
-### Prerequisites (TT-XLA Setup)
-
-Before using the profiler, you need to configure TT-XLA for memory logging:
-
-#### 1. Build the project with debug flags
+#### 1. Build `tt-xla` with debug flags and Python bindings enabled
 
 ```bash
 source venv/activate
 
-cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Debug -DTT_RUNTIME_DEBUG=ON
+cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Debug -DTT_RUNTIME_DEBUG=ON -DTTMLIR_ENABLE_BINDINGS_PYTHON=ON
 
 cmake --build build
 ```
@@ -37,6 +27,24 @@ cmake --build build
 export TTMLIR_RUNTIME_LOGGER_LEVEL=DEBUG
 export TT_RUNTIME_MEMORY_LOG_LEVEL=operation
 ```
+
+#### 3. Initialize TTRT artifacts
+
+```bash
+ttrt query --save-artifacts
+```
+
+## Installation
+
+```bash
+cd /path/to/tt-xla
+source venv/activate
+pip install git+https://github.com/vkovinicTT/tt-swiss.git
+```
+
+> **Note**: Always activate the tt-xla environment first (`source venv/activate`). This sets up the required paths for the model analyzer to find tt-xla's op-by-op test infrastructure.
+
+## Memory profiler
 
 ### Usage
 
@@ -96,16 +104,78 @@ Output is stored in `./logs/` relative to your current working directory (or `--
 - Right-click on the HTML file and choose "Open with Live Server"
 - Requires the Live Server extension in VS Code
 
-**Option 3: Manual HTTP server**
-```bash
-cd logs/your_model_YYYYMMDD_HHMMSS/
-python -m http.server 8000
-# Open http://localhost:8000/your_model_report.html
-```
-
 ### Features
 
 - Interactive HTML visualization with memory graphs, fragmentation analysis, peak operations
 - Synchronized JSON outputs (nth element = same operation)
 - Filtered data (excludes deallocate operations)
 - Timestamped runs (never overwrites previous data)
+
+## Model Analysis Tool
+
+Analyze PyTorch models to identify which modules/ops work on TT hardware.
+
+### Prerequisites
+
+### Quick Start
+
+```bash
+tt-model-analysis \
+    --model-path path/to/model.py::load_model \
+    --inputs-path path/to/model.py::get_inputs
+```
+
+### What It Does
+
+1. **Extract Modules**: Identifies all unique modules in the model
+2. **Run Op-by-Op Analysis**: Tests each module hierarchically on TT hardware
+3. **Generate Report**: Creates interactive HTML visualization showing pass/fail status
+
+### Usage
+
+The tool requires two Python functions:
+- `load_model()` - Returns the PyTorch model
+- `get_inputs()` - Returns sample input tensors
+
+```bash
+# Basic usage
+tt-model-analysis --model-path model.py::load_model --inputs-path model.py::get_inputs
+
+# Specify output directory
+tt-model-analysis --model-path model.py::load_model --inputs-path model.py::get_inputs --dir ./output
+```
+
+### Output
+
+```
+<ModelClass>/
+├── unique_modules.json      # Module analysis results with status
+├── analysis_report.html     # Interactive tree visualization
+└── module_irs/              # IR files for each module
+```
+
+### Example
+
+```python
+# model.py
+import torch
+import torch.nn as nn
+
+def load_model():
+    # Just return the model on CPU - the tool handles device placement
+    return nn.Sequential(
+        nn.Conv2d(3, 64, 3),
+        nn.ReLU(),
+        nn.Linear(64, 10)
+    )
+
+def get_inputs():
+    # Just return CPU tensors - the tool handles device placement
+    return torch.randn(1, 3, 224, 224)
+```
+
+> **Note**: Your functions should return CPU models/tensors. The tool automatically handles moving them to the TT device.
+
+```bash
+tt-model-analysis --model-path model.py::load_model --inputs-path model.py::get_inputs
+```

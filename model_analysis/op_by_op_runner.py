@@ -1,0 +1,196 @@
+# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Op-by-op analysis runner with lazy IR export."""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Dict, List
+
+from .module_tree import ModuleNode
+
+CONTAINER_TYPES = ("Sequential", "ModuleList", "ModuleDict")
+
+
+def _export_ir(module_id: str, modules_json: Path, model_path: str, inputs_path: str, output_dir: Path) -> bool:
+    """Export IR for a single module via subprocess."""
+    script = Path(__file__).parent / "ir_export_single_module.py"
+    cmd = [sys.executable, str(script), "--module-id", module_id, "--modules-json", str(modules_json),
+           "--model-path", model_path, "--inputs-path", inputs_path, "--output-dir", str(output_dir)]
+
+    print(f"    Exporting IR for {module_id}...", end=" ", flush=True)
+    try:
+        result = subprocess.run(cmd, timeout=300, capture_output=True)
+        if result.returncode == 0:
+            print("OK")
+            return True
+        print("FAILED")
+        if result.stderr:
+            for line in result.stderr.decode('utf-8', errors='replace').strip().split('\n')[-3:]:
+                print(f"      {line}")
+        return False
+    except subprocess.TimeoutExpired:
+        print("TIMEOUT")
+        return False
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return False
+
+
+def _run_op_by_op(module_id: str, module_irs_dir: Path, project_root: Path) -> Dict[str, Any]:
+    """Run op-by-op analysis on module's TTIR files."""
+    irs_dir = module_irs_dir / "irs"
+    if not irs_dir.exists() or not list(irs_dir.glob("ttir_*.mlir")):
+        return {"success": True, "failed_ops": [], "report_path": None, "skipped": True}
+
+    report_path = module_irs_dir / f"{module_id}_op_by_op_report.json"
+    cmd = ["pytest", "-svv", "tests/op_by_op/op_by_op_test.py::test_op_by_op",
+           f"--folder={module_irs_dir}", "--ir-file-prefix=irs/ttir_",
+           "--json-report", f"--json-report-file={report_path}"]
+
+    print(f"    Running: {' '.join(cmd)}")
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = ":".join([
+        str(project_root / "tests"),
+        str(project_root / "third_party/tt-mlir/src/tt-mlir/build/python_packages"),
+        env.get("PYTHONPATH", ""),
+    ])
+
+    try:
+        result = subprocess.run(cmd, cwd=str(project_root), env=env, timeout=600)
+        returncode = result.returncode
+    except subprocess.TimeoutExpired:
+        return {"success": False, "failed_ops": [{"op_name": "TIMEOUT", "error_message": "10min"}],
+                "report_path": None, "skipped": False}
+    except Exception as e:
+        return {"success": False, "failed_ops": [{"op_name": "ERROR", "error_message": str(e)}],
+                "report_path": None, "skipped": False}
+
+    failed_ops = _parse_report(report_path) if report_path.exists() else []
+    if returncode != 0 and not failed_ops:
+        failed_ops = [{"op_name": "PYTEST_FAILED", "error_message": f"Exit code {returncode}"}]
+
+    return {"success": returncode == 0, "failed_ops": failed_ops,
+            "report_path": str(report_path) if report_path.exists() else None, "skipped": False}
+
+
+def _parse_report(report_path: Path) -> List[Dict[str, Any]]:
+    """Parse pytest-json-report for failed ops."""
+    try:
+        with open(report_path) as f:
+            report = json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        return []
+
+    failed_ops = []
+    for test in report.get("tests", []):
+        for prop in test.get("user_properties", []):
+            if not isinstance(prop, dict):
+                continue
+            for key, value in prop.items():
+                if key.startswith("OpTest model for:") and isinstance(value, dict):
+                    if value.get("success") == "False":
+                        failed_ops.append({
+                            "op_name": value.get("op_name"),
+                            "error_message": value.get("error_message"),
+                            "inputs": value.get("inputs", ""),
+                            "outputs": value.get("outputs", ""),
+                        })
+    return failed_ops
+
+
+def _mark_subtree_success(node: ModuleNode):
+    """Mark node and descendants as success."""
+    if node.status is None:
+        node.status = "success"
+    for child in node.children:
+        child.status = "inherited_success"
+        _mark_subtree_success(child)
+
+
+def _update_container_status(node: ModuleNode) -> str:
+    """Update container status based on children (post-order)."""
+    for child in node.children:
+        _update_container_status(child)
+
+    if node.class_name not in CONTAINER_TYPES or not node.children:
+        return node.status or "unknown"
+    if node.status == "inherited_success":
+        return node.status
+
+    statuses = [c.status for c in node.children if c.status]
+    if not statuses:
+        return node.status or "skipped"
+
+    if "failed" in statuses or "ir_export_failed" in statuses:
+        node.status = "failed"
+    elif all(s in ("success", "inherited_success") for s in statuses):
+        node.status = "inherited_success"
+    elif any(s in ("success", "inherited_success") for s in statuses):
+        node.status = "inherited_success"
+    else:
+        node.status = "skipped"
+
+    return node.status
+
+
+def run_hierarchical_op_by_op(root: ModuleNode, module_irs_base: Path, project_root: Path,
+                              modules_json_path: Path, model_path: str, inputs_path: str,
+                              output_dir: Path) -> None:
+    """Run hierarchical op-by-op analysis with lazy IR export."""
+    exported = set()
+
+    def analyze(node: ModuleNode):
+        module_irs_dir = module_irs_base / node.module_id
+
+        if node.class_name in CONTAINER_TYPES:
+            print(f"  {node.module_id} ({node.class_name}): Skipped (container)")
+            node.status = "skipped"
+            for child in node.children:
+                analyze(child)
+            return
+
+        print(f"  {node.module_id} ({node.class_name}):")
+
+        if node.module_id not in exported:
+            if not _export_ir(node.module_id, modules_json_path, model_path, inputs_path, output_dir):
+                node.status = "ir_export_failed"
+                for child in node.children:
+                    analyze(child)
+                return
+            exported.add(node.module_id)
+
+        if not module_irs_dir.exists():
+            node.status = "skipped"
+            for child in node.children:
+                analyze(child)
+            return
+
+        print(f"    Running op-by-op...")
+        result = _run_op_by_op(node.module_id, module_irs_dir, project_root)
+
+        if result.get("skipped"):
+            node.status = "skipped"
+            for child in node.children:
+                analyze(child)
+            return
+
+        if result["success"]:
+            print(f"    SUCCESS - marking subtree")
+            _mark_subtree_success(node)
+        else:
+            print(f"    FAILED - {len(result['failed_ops'])} ops")
+            node.status = "failed"
+            node.failed_ops = result["failed_ops"]
+            node.op_by_op_report_path = result["report_path"]
+            for child in node.children:
+                analyze(child)
+
+    if root:
+        analyze(root)
+        _update_container_status(root)
