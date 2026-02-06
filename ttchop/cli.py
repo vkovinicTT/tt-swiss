@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--model-path", required=True, help="Model loader (file.py::function)")
     parser.add_argument("--inputs-path", required=True, help="Inputs function (file.py::function)")
     parser.add_argument("--dir", default=None, help="Output directory")
+    parser.add_argument("--root-only", action="store_true", help="Only analyze root module, skip submodules")
     args = parser.parse_args()
 
     try:
@@ -58,7 +59,7 @@ def main():
                 root=root, module_irs_base=output_dir / "module_irs",
                 project_root=project_root, modules_json_path=modules_json,
                 model_path=args.model_path, inputs_path=args.inputs_path,
-                output_dir=output_dir,
+                output_dir=output_dir, root_only=args.root_only,
             )
             result = update_modules_with_status(result, root)
             with open(modules_json, "w") as f:

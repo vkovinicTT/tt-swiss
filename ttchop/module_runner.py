@@ -32,7 +32,7 @@ def run_submodule_for_ir(
     module_info: Dict[str, Any],
     output_dir: Path,
     device: Any,
-    get_sample_input: Optional[Callable[[], Union[torch.Tensor, Tuple[torch.Tensor, ...]]]] = None,
+    get_sample_input: Optional[Callable[[], Union[torch.Tensor, Tuple[torch.Tensor, ...], Dict[str, Any]]]] = None,
 ) -> bool:
     """Run a submodule through TT backend to export IRs."""
     import torch_xla
@@ -59,7 +59,9 @@ def run_submodule_for_ir(
     # Generate input
     if module_path == "(root)" and get_sample_input:
         input_data = get_sample_input()
-        if isinstance(input_data, (tuple, list)):
+        if isinstance(input_data, dict):
+            inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in input_data.items()}
+        elif isinstance(input_data, (tuple, list)):
             inputs = tuple(t.to(device) if isinstance(t, torch.Tensor) else t for t in input_data)
         else:
             inputs = (input_data.to(device),)
@@ -69,7 +71,7 @@ def run_submodule_for_ir(
     # Run forward pass - IRs are exported during compilation, so runtime failures are OK
     try:
         with torch.no_grad():
-            compiled(*inputs)
+            compiled(*inputs.values()) if isinstance(inputs, dict) else compiled(*inputs)
     except Exception as e:
         # IRs should still be exported even if runtime fails
         print(f"Note: Runtime failed for {module_id} (IRs still exported): {type(e).__name__}")

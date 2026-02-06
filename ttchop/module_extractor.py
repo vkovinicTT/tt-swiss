@@ -48,7 +48,7 @@ def _run_shape_subprocess(model_path: str, inputs_path: str, output_file: Path) 
 
 def extract_unique_modules(
     load_fn: Callable[[], nn.Module],
-    get_sample_input: Callable[[], Union[torch.Tensor, Tuple[torch.Tensor, ...]]],
+    get_sample_input: Callable[[], Union[torch.Tensor, Tuple[torch.Tensor, ...], Dict[str, Any]]],
     output_path: Optional[str] = "unique_modules.json",
     model_path: Optional[str] = None,
     inputs_path: Optional[str] = None,

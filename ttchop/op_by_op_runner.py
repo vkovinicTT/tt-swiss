@@ -113,6 +113,13 @@ def _mark_subtree_success(node: ModuleNode):
         _mark_subtree_success(child)
 
 
+def _mark_subtree_skipped(node: ModuleNode):
+    """Mark node and all descendants as skipped."""
+    node.status = "skipped"
+    for child in node.children:
+        _mark_subtree_skipped(child)
+
+
 def _update_container_status(node: ModuleNode) -> str:
     """Update container status based on children (post-order)."""
     for child in node.children:
@@ -141,18 +148,23 @@ def _update_container_status(node: ModuleNode) -> str:
 
 def run_hierarchical_op_by_op(root: ModuleNode, module_irs_base: Path, project_root: Path,
                               modules_json_path: Path, model_path: str, inputs_path: str,
-                              output_dir: Path) -> None:
+                              output_dir: Path, root_only: bool = False) -> None:
     """Run hierarchical op-by-op analysis with lazy IR export."""
     exported = set()
 
-    def analyze(node: ModuleNode):
+    def analyze(node: ModuleNode, is_root_call: bool = False):
+        if root_only and not is_root_call:
+            print(f"  {node.module_id} ({node.class_name}): Skipped (--root-only)")
+            _mark_subtree_skipped(node)
+            return
+
         module_irs_dir = module_irs_base / node.module_id
 
         if node.class_name in CONTAINER_TYPES:
             print(f"  {node.module_id} ({node.class_name}): Skipped (container)")
             node.status = "skipped"
             for child in node.children:
-                analyze(child)
+                analyze(child, is_root_call=False)
             return
 
         print(f"  {node.module_id} ({node.class_name}):")
@@ -160,15 +172,19 @@ def run_hierarchical_op_by_op(root: ModuleNode, module_irs_base: Path, project_r
         if node.module_id not in exported:
             if not _export_ir(node.module_id, modules_json_path, model_path, inputs_path, output_dir):
                 node.status = "ir_export_failed"
-                for child in node.children:
-                    analyze(child)
+                if root_only:
+                    for child in node.children:
+                        _mark_subtree_skipped(child)
+                else:
+                    for child in node.children:
+                        analyze(child, is_root_call=False)
                 return
             exported.add(node.module_id)
 
         if not module_irs_dir.exists():
             node.status = "skipped"
             for child in node.children:
-                analyze(child)
+                analyze(child, is_root_call=False)
             return
 
         print(f"    Running op-by-op...")
@@ -177,20 +193,30 @@ def run_hierarchical_op_by_op(root: ModuleNode, module_irs_base: Path, project_r
         if result.get("skipped"):
             node.status = "skipped"
             for child in node.children:
-                analyze(child)
+                analyze(child, is_root_call=False)
             return
 
         if result["success"]:
-            print(f"    SUCCESS - marking subtree")
-            _mark_subtree_success(node)
+            if root_only:
+                print(f"    SUCCESS")
+                node.status = "success"
+                for child in node.children:
+                    _mark_subtree_skipped(child)
+            else:
+                print(f"    SUCCESS - marking subtree")
+                _mark_subtree_success(node)
         else:
             print(f"    FAILED - {len(result['failed_ops'])} ops")
             node.status = "failed"
             node.failed_ops = result["failed_ops"]
             node.op_by_op_report_path = result["report_path"]
-            for child in node.children:
-                analyze(child)
+            if root_only:
+                for child in node.children:
+                    _mark_subtree_skipped(child)
+            else:
+                for child in node.children:
+                    analyze(child, is_root_call=False)
 
     if root:
-        analyze(root)
+        analyze(root, is_root_call=True)
         _update_container_status(root)

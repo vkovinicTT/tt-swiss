@@ -27,7 +27,7 @@ class ShapeCapture:
             return [i for v in value.values() for i in self._tensor_info(v)]
         return []
 
-    def run(self, sample_input: Union[torch.Tensor, Tuple[torch.Tensor, ...]],
+    def run(self, sample_input: Union[torch.Tensor, Tuple[torch.Tensor, ...], Dict[str, Any]],
             device: Optional[Any] = None) -> Dict[str, Dict[str, List[Dict[str, str]]]]:
         self.shapes.clear()
 
@@ -49,14 +49,21 @@ class ShapeCapture:
 
         model = self.model.to(device) if device else self.model
         if device:
-            if isinstance(sample_input, tuple):
+            if isinstance(sample_input, dict):
+                sample_input = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in sample_input.items()}
+            elif isinstance(sample_input, tuple):
                 sample_input = tuple(t.to(device) if isinstance(t, torch.Tensor) else t for t in sample_input)
             elif isinstance(sample_input, torch.Tensor):
                 sample_input = sample_input.to(device)
 
         try:
             with torch.no_grad():
-                model(*sample_input) if isinstance(sample_input, tuple) else model(sample_input)
+                if isinstance(sample_input, dict):
+                    model(*sample_input.values())
+                elif isinstance(sample_input, tuple):
+                    model(*sample_input)
+                else:
+                    model(sample_input)
         finally:
             for h in self._hooks:
                 h.remove()
