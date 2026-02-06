@@ -3,7 +3,7 @@
 This repo is a collection of all of the useful tools for enabling models to work on TT hardware. This includes:
 1. Memory profiler `ttmem` - useful for look at memory usage of the model. Signs that you need this - errors like `Out of Memory: Not enough space to allocate <nbytes> B DRAM buffer across <nbanks> banks`
 
-2. Model analyzer `tt-model-analysis` - analyzes PyTorch models to identify which modules/ops work on TT hardware. Generates interactive HTML report showing pass/fail status for each module.
+2. Model analyzer `ttchop` - analyzes PyTorch models to identify which modules/ops work on TT hardware. Generates interactive HTML report showing pass/fail status for each module.
 
 3. Claude skills and commands - We recommend you copy paste these in your `~/.claude` or `<tt-xla-path>/.claude` for easier debugging of models.
 
@@ -120,7 +120,7 @@ Analyze PyTorch models to identify which modules/ops work on TT hardware.
 ### Quick Start
 
 ```bash
-tt-model-analysis \
+ttchop \
     --model-path path/to/model.py::load_model \
     --inputs-path path/to/model.py::get_inputs
 ```
@@ -139,10 +139,10 @@ The tool requires two Python functions:
 
 ```bash
 # Basic usage
-tt-model-analysis --model-path model.py::load_model --inputs-path model.py::get_inputs
+ttchop --model-path model.py::load_model --inputs-path model.py::get_inputs
 
 # Specify output directory
-tt-model-analysis --model-path model.py::load_model --inputs-path model.py::get_inputs --dir ./output
+ttchop --model-path model.py::load_model --inputs-path model.py::get_inputs --dir ./output
 ```
 
 ### Output
@@ -177,5 +177,5 @@ def get_inputs():
 > **Note**: Your functions should return CPU models/tensors. The tool automatically handles moving them to the TT device.
 
 ```bash
-tt-model-analysis --model-path model.py::load_model --inputs-path model.py::get_inputs
+ttchop --model-path model.py::load_model --inputs-path model.py::get_inputs
 ```

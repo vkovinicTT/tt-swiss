@@ -5,7 +5,7 @@ Tool for analyzing PyTorch models to identify which modules/ops work on TT hardw
 ## Architecture
 
 ```
-cli.py                     # Entry point: tt-model-analysis command
+cli.py                     # Entry point: ttchop command
 ├── module_extractor.py    # Step 1: Extract unique modules from model
 │   ├── shapes.py          # Shape capture via forward hooks
 │   └── data_types.py      # ModuleInfo dataclass
@@ -63,7 +63,7 @@ cli.py                     # Entry point: tt-model-analysis command
 
 ### Run Analysis
 ```bash
-tt-model-analysis \
+ttchop \
     --model-path path/to/model.py::load_model \
     --inputs-path path/to/model.py::get_inputs \
     --dir ./output
@@ -71,7 +71,7 @@ tt-model-analysis \
 
 ### Debug IR Export
 ```bash
-python -m model_analysis.ir_export_single_module \
+python -m ttchop.ir_export_single_module \
     --module-id mod_000 \
     --modules-json ./output/unique_modules.json \
     --model-path model.py::load_model \

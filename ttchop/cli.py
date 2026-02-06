@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI for model analysis: tt-model-analysis --model-path file.py::fn --inputs-path file.py::fn"""
+"""CLI for model analysis: ttchop --model-path file.py::fn --inputs-path file.py::fn"""
 
 import argparse
 import json

@@ -19,14 +19,14 @@ From the `tt-swiss` directory:
 pip install -e .
 ```
 
-This installs the `tt-model-analysis` CLI command.
+This installs the `ttchop` CLI command.
 
 ## CLI Usage
 
 The simplest way to use this tool is via the command line:
 
 ```bash
-tt-model-analysis --model-path path/to/file.py::load_model_fn \
+ttchop --model-path path/to/file.py::load_model_fn \
                   --inputs-path path/to/file.py::get_inputs_fn \
                   [--dir output_directory]
 ```
@@ -68,7 +68,7 @@ def get_inputs():
 2. Run the analysis:
 
 ```bash
-tt-model-analysis --model-path my_model.py::load_model --inputs-path my_model.py::get_inputs
+ttchop --model-path my_model.py::load_model --inputs-path my_model.py::get_inputs
 ```
 
 3. Check the output:
@@ -83,7 +83,7 @@ Sequential/
 You can also use the package programmatically:
 
 ```python
-from model_analysis import extract_unique_modules, extract_pytorch_ops
+from ttchop import extract_unique_modules, extract_pytorch_ops
 import torch
 import torch.nn as nn
 
@@ -230,7 +230,7 @@ The tool extracts ALL modules - both container modules (Sequential, ModuleList) 
 ## Module Structure
 
 ```
-model_analysis/
+ttchop/
 ├── __init__.py           # Public API exports
 ├── cli.py                # CLI entry point
 ├── types.py              # Data classes (ModuleInfo, OpInfo)

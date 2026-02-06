@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tt-swiss"
 version = "0.1.0"
-description = "Swiss army knife tools for Tenstorrent hardware - memory profiler and model analysis"
+description = "Swiss army knife tools for Tenstorrent hardware - memory profiler and ttchop"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.8"
@@ -31,8 +31,8 @@ classifiers = [
 [project.scripts]
 tt-memory-profiler = "memory_profiler.run_profiled:main"
 ttmem = "memory_profiler.interactive_cli:main"
-tt-model-analysis = "model_analysis.cli:main"
+ttchop = "ttchop.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["memory_profiler*", "model_analysis*"]
+include = ["memory_profiler*", "ttchop*"]
