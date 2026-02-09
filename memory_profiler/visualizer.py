@@ -808,7 +808,7 @@ class MemoryVisualizer:
                     "y": all_allocated[mem_type],
                     "type": "scatter",
                     "mode": "lines+markers",
-                    "name": "Allocated",
+                    "name": "Main",
                     "line": {"width": 2, "color": "#1f77b4"},
                     "marker": {"size": 3, "color": "#1f77b4"},
                     "visible": (mem_type == "DRAM"),  # Only DRAM visible by default
@@ -830,7 +830,7 @@ class MemoryVisualizer:
                         "y": weight_op_allocated[mem_type],
                         "type": "scatter",
                         "mode": "markers",
-                        "name": "Weight Ops",
+                        "name": "Consteval",
                         "marker": {"size": 5, "color": "red", "symbol": "circle"},
                         "visible": (mem_type == "DRAM"),
                         "showlegend": True,

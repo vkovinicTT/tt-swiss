@@ -16,6 +16,31 @@ from .module_tree import ModuleNode
 CONTAINER_TYPES = ("Sequential", "ModuleList", "ModuleDict")
 
 
+def _ensure_system_desc(project_root: Path) -> Path:
+    """Ensure system descriptor exists, generating it if needed."""
+    desc_path = project_root / "ttrt-artifacts" / "system_desc.ttsys"
+    if desc_path.exists():
+        return desc_path
+
+    print(f"Generating system descriptor at {desc_path}...")
+    try:
+        result = subprocess.run(
+            ["ttrt", "query", "--save-artifacts"],
+            cwd=str(project_root),
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            print(f"Failed to generate system descriptor at {desc_path}: {stderr}")
+            raise SystemExit(1)
+    except FileNotFoundError:
+        print(f"Failed to generate system descriptor at {desc_path}: 'ttrt' command not found")
+        raise SystemExit(1)
+
+    print(f"Successfully generated system descriptor at {desc_path}")
+    return desc_path
+
+
 def _export_ir(module_id: str, modules_json: Path, model_path: str, inputs_path: str, output_dir: Path) -> bool:
     """Export IR for a single module via subprocess."""
     script = Path(__file__).parent / "ir_export_single_module.py"
@@ -60,6 +85,7 @@ def _run_op_by_op(module_id: str, module_irs_dir: Path, project_root: Path) -> D
         str(project_root / "third_party/tt-mlir/src/tt-mlir/build/python_packages"),
         env.get("PYTHONPATH", ""),
     ])
+    env["SYSTEM_DESC_PATH"] = str(project_root / "ttrt-artifacts" / "system_desc.ttsys")
 
     try:
         result = subprocess.run(cmd, cwd=str(project_root), env=env, timeout=600)
@@ -150,6 +176,7 @@ def run_hierarchical_op_by_op(root: ModuleNode, module_irs_base: Path, project_r
                               modules_json_path: Path, model_path: str, inputs_path: str,
                               output_dir: Path, root_only: bool = False) -> None:
     """Run hierarchical op-by-op analysis with lazy IR export."""
+    _ensure_system_desc(project_root)
     exported = set()
 
     def analyze(node: ModuleNode, is_root_call: bool = False):
