@@ -189,6 +189,51 @@ class MemoryVisualizer:
         has_ir = self._has_ir_data()
         irs_tab_style = "" if has_ir else "display: none;"
 
+        # Build per-operation data for the detail popup
+        ops_for_js = []
+        for i, op in enumerate(self.ops_data):
+            weights = []
+            if op.get("weights"):
+                for w in op["weights"]:
+                    weights.append({
+                        "name": w.get("name", ""),
+                        "shape": w.get("shape", ""),
+                        "dtype": w.get("dtype", ""),
+                    })
+            ops_for_js.append({
+                "index": i,
+                "mlir_op": op.get("mlir_op", "unknown"),
+                "loc": op.get("loc", ""),
+                "inputs": op.get("inputs", []),
+                "input_shapes": op.get("input_shapes", []),
+                "input_dtypes": op.get("input_dtypes", []),
+                "output_shapes": op.get("output_shapes", []),
+                "output_dtypes": op.get("output_dtypes", []),
+                "attributes": op.get("attributes", ""),
+                "is_weight_op": op.get("is_weight_op", False),
+                "weights": weights,
+                "source": "Consteval" if op.get("const_eval_graph") else "Main",
+            })
+
+        mem_for_js = []
+        for entry in self.mem_data:
+            mem_entry = {}
+            for mt in ["DRAM", "L1", "L1_SMALL"]:
+                if mt in entry.get("memory", {}):
+                    mem_entry[mt] = entry["memory"][mt].get("totalBytesAllocatedPerBank_MB", 0)
+            unpadded = entry.get("unpadded_memory")
+            if unpadded:
+                mem_entry["unpadded"] = {}
+                for mt in ["DRAM", "L1"]:
+                    um = unpadded.get(mt)
+                    if um:
+                        mem_entry["unpadded"][mt] = {
+                            "unpadded_MB": um.get("unpadded_MB", 0),
+                            "padded_MB": um.get("padded_MB", 0),
+                            "overhead_pct": um.get("overhead_pct", 0),
+                        }
+            mem_for_js.append(mem_entry)
+
         html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -541,6 +586,158 @@ class MemoryVisualizer:
             color: var(--text-secondary);
             font-size: 16px;
         }}
+
+        /* Operation detail popup */
+        .op-popup-overlay {{
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 9998;
+        }}
+        .op-popup {{
+            display: none;
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: var(--bg-primary);
+            border: 1px solid var(--border-strong);
+            border-radius: 10px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            z-index: 9999;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }}
+        .op-popup-header {{
+            position: sticky;
+            top: 0;
+            background: var(--bg-secondary);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-medium);
+            border-radius: 10px 10px 0 0;
+            z-index: 1;
+        }}
+        .op-popup-header h3 {{
+            margin: 0;
+            font-size: 15px;
+            color: var(--text-primary);
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            word-break: break-all;
+        }}
+        .op-popup-close {{
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0 0 0 12px;
+            line-height: 1;
+            flex-shrink: 0;
+        }}
+        .op-popup-close:hover {{
+            color: var(--text-primary);
+        }}
+        .op-popup-body {{
+            padding: 20px;
+        }}
+        .op-popup-section {{
+            margin-bottom: 16px;
+        }}
+        .op-popup-label {{
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-disabled);
+            margin-bottom: 4px;
+        }}
+        .op-popup-value {{
+            font-size: 14px;
+            color: var(--text-primary);
+        }}
+        .op-popup-footer {{
+            padding: 12px 20px;
+            border-top: 1px solid var(--border-medium);
+            text-align: right;
+        }}
+        .op-popup-footer button {{
+            background: var(--accent-primary);
+            color: #fff;
+            border: none;
+            padding: 8px 18px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+        }}
+        .op-popup-footer button:hover:not(:disabled) {{
+            filter: brightness(1.15);
+        }}
+        .op-popup-footer button:disabled {{
+            opacity: 0.4;
+            cursor: not-allowed;
+        }}
+        .op-popup-io-item {{
+            display: inline-block;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-weak);
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            margin: 2px 4px 2px 0;
+            color: var(--text-primary);
+        }}
+        .op-popup-badge {{
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+            vertical-align: middle;
+        }}
+        .op-popup-badge.weight {{
+            background: rgba(209, 14, 92, 0.25);
+            color: #ff6b8a;
+        }}
+        .op-popup-badge.activation {{
+            background: rgba(61, 113, 217, 0.25);
+            color: #6e9fff;
+        }}
+        .op-popup-mem-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+        }}
+        .op-popup-mem-card {{
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-weak);
+            border-radius: 6px;
+            padding: 12px;
+            text-align: center;
+        }}
+        .op-popup-mem-card .mem-type {{
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }}
+        .op-popup-mem-card .mem-value {{
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }}
+        .op-popup-mem-card .mem-unit {{
+            font-size: 12px;
+            color: var(--text-secondary);
+        }}
     </style>
 </head>
 <body>
@@ -626,6 +823,19 @@ class MemoryVisualizer:
                 </div>
             </div>
         </main>
+
+        <!-- Operation detail popup -->
+        <div id="op-popup-overlay" class="op-popup-overlay" onclick="closeOpPopup()"></div>
+        <div id="op-popup" class="op-popup">
+            <div class="op-popup-header">
+                <h3 id="op-popup-title">Operation Details</h3>
+                <button class="op-popup-close" onclick="closeOpPopup()">&times;</button>
+            </div>
+            <div class="op-popup-body" id="op-popup-body"></div>
+            <div class="op-popup-footer">
+                <button id="op-popup-ir-btn" onclick="jumpToIRFromPopup()" disabled>Jump to op in IR</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -635,6 +845,11 @@ class MemoryVisualizer:
 
         // IR location indices for navigation
         const irLocIndex = {json.dumps(ir_loc_index)};
+
+        // Per-operation data for detail popup
+        const opsData = {json.dumps(ops_for_js)};
+        const memData = {json.dumps(mem_for_js)};
+        const hasIRData = {'true' if has_ir else 'false'};
 
         // Track current highlighted line
         let currentHighlightedLine = null;
@@ -714,6 +929,173 @@ class MemoryVisualizer:
             }}
         }}
 
+        // --- Operation detail popup ---
+        let popupCurrentLoc = null;
+
+        function escapeHtml(text) {{
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }}
+
+        function openOpPopup(opIndex) {{
+            if (opIndex < 0 || opIndex >= opsData.length) return;
+            const op = opsData[opIndex];
+            const mem = opIndex < memData.length ? memData[opIndex] : {{}};
+            popupCurrentLoc = op.loc || null;
+
+            // Header: op name + badge
+            const badge = op.is_weight_op
+                ? '<span class="op-popup-badge weight">Weight Op</span>'
+                : '<span class="op-popup-badge activation">Activation</span>';
+            document.getElementById('op-popup-title').innerHTML = escapeHtml(op.mlir_op) + badge;
+
+            // Body
+            let html = '';
+
+            // Op index
+            html += '<div class="op-popup-section">';
+            html += '<div class="op-popup-label">Operation Index</div>';
+            html += '<div class="op-popup-value">#' + op.index + '</div>';
+            html += '</div>';
+
+            // Source
+            html += '<div class="op-popup-section">';
+            html += '<div class="op-popup-label">Source</div>';
+            html += '<div class="op-popup-value">' + escapeHtml(op.source) + '</div>';
+            html += '</div>';
+
+            // Inputs
+            html += '<div class="op-popup-section">';
+            html += '<div class="op-popup-label">Inputs</div>';
+            html += '<div class="op-popup-value">';
+            if (op.input_shapes && op.input_shapes.length > 0) {{
+                op.input_shapes.forEach(function(shape, i) {{
+                    const dtype = (op.input_dtypes && op.input_dtypes[i]) || '?';
+                    const label = shape ? shape : 'scalar';
+                    html += '<span class="op-popup-io-item">' + escapeHtml(label) + ' ' + escapeHtml(dtype) + '</span>';
+                }});
+            }} else {{
+                html += '<em style="color:var(--text-disabled)">None</em>';
+            }}
+            html += '</div></div>';
+
+            // Outputs
+            html += '<div class="op-popup-section">';
+            html += '<div class="op-popup-label">Outputs</div>';
+            html += '<div class="op-popup-value">';
+            if (op.output_shapes && op.output_shapes.length > 0) {{
+                op.output_shapes.forEach(function(shape, i) {{
+                    const dtype = (op.output_dtypes && op.output_dtypes[i]) || '?';
+                    const label = shape ? shape : 'scalar';
+                    html += '<span class="op-popup-io-item">' + escapeHtml(label) + ' ' + escapeHtml(dtype) + '</span>';
+                }});
+            }} else {{
+                html += '<em style="color:var(--text-disabled)">None</em>';
+            }}
+            html += '</div></div>';
+
+            // Attributes
+            html += '<div class="op-popup-section">';
+            html += '<div class="op-popup-label">Attributes</div>';
+            html += '<div class="op-popup-value">';
+            if (op.attributes) {{
+                html += '<span class="code" style="white-space:pre-wrap;word-break:break-all;">' + escapeHtml(op.attributes) + '</span>';
+            }} else {{
+                html += '<em style="color:var(--text-disabled)">None</em>';
+            }}
+            html += '</div></div>';
+
+            // Weights
+            if (op.weights && op.weights.length > 0) {{
+                html += '<div class="op-popup-section">';
+                html += '<div class="op-popup-label">Weights</div>';
+                html += '<div class="op-popup-value">';
+                op.weights.forEach(function(w) {{
+                    html += '<span class="op-popup-io-item">' + escapeHtml(w.name) + ' ' + escapeHtml(w.shape) + ' ' + escapeHtml(w.dtype) + '</span>';
+                }});
+                html += '</div></div>';
+            }}
+
+            // Memory stats
+            const memTypes = ['DRAM', 'L1', 'L1_SMALL'];
+            const hasAnyMem = memTypes.some(function(mt) {{ return mem[mt] !== undefined; }});
+            if (hasAnyMem) {{
+                html += '<div class="op-popup-section">';
+                html += '<div class="op-popup-label">Memory at This Operation</div>';
+                html += '<div class="op-popup-mem-grid">';
+                memTypes.forEach(function(mt) {{
+                    if (mem[mt] !== undefined) {{
+                        html += '<div class="op-popup-mem-card">';
+                        html += '<div class="mem-type">' + mt + '</div>';
+                        html += '<div class="mem-value">' + mem[mt].toFixed(2) + '</div>';
+                        html += '<div class="mem-unit">MB/bank</div>';
+                        html += '</div>';
+                    }}
+                }});
+                html += '</div></div>';
+            }}
+
+            // Tile padding overhead
+            if (mem.unpadded) {{
+                html += '<div class="op-popup-section">';
+                html += '<div class="op-popup-label">Tile Padding Overhead</div>';
+                html += '<div class="op-popup-value">';
+                ['DRAM', 'L1'].forEach(function(mt) {{
+                    var u = mem.unpadded[mt];
+                    if (u && (u.unpadded_MB > 0 || u.padded_MB > 0)) {{
+                        html += '<div style="margin-bottom:4px;">';
+                        html += '<span style="color:var(--text-secondary);font-size:12px;">' + mt + ':</span> ';
+                        html += '<span class="code">' + u.unpadded_MB.toFixed(2) + ' MB</span>';
+                        html += ' <span style="color:var(--text-disabled);">&rarr;</span> ';
+                        html += '<span class="code">' + u.padded_MB.toFixed(2) + ' MB</span>';
+                        if (u.overhead_pct > 0) {{
+                            var color = u.overhead_pct > 100 ? '#ff6b6b' : u.overhead_pct > 50 ? '#ff9900' : 'var(--text-secondary)';
+                            html += ' <span style="color:' + color + ';font-weight:600;font-size:12px;">(+' + u.overhead_pct.toFixed(1) + '%)</span>';
+                        }}
+                        html += '</div>';
+                    }}
+                }});
+                html += '</div></div>';
+            }}
+
+            document.getElementById('op-popup-body').innerHTML = html;
+
+            // IR button
+            const irBtn = document.getElementById('op-popup-ir-btn');
+            if (hasIRData && popupCurrentLoc && (irLocIndex.ttnn[popupCurrentLoc] || irLocIndex.ttir[popupCurrentLoc])) {{
+                irBtn.disabled = false;
+                irBtn.title = '';
+            }} else {{
+                irBtn.disabled = true;
+                irBtn.title = popupCurrentLoc ? 'Location not found in IR data' : 'No location available for this operation';
+            }}
+
+            // Show
+            document.getElementById('op-popup-overlay').style.display = 'block';
+            document.getElementById('op-popup').style.display = 'block';
+        }}
+
+        function closeOpPopup() {{
+            document.getElementById('op-popup-overlay').style.display = 'none';
+            document.getElementById('op-popup').style.display = 'none';
+            popupCurrentLoc = null;
+        }}
+
+        function jumpToIRFromPopup() {{
+            const loc = popupCurrentLoc;
+            closeOpPopup();
+            if (loc) navigateToIR(loc, 'ttnn');
+        }}
+
+        // Dismiss popup on Escape
+        document.addEventListener('keydown', function(e) {{
+            if (e.key === 'Escape' && document.getElementById('op-popup').style.display === 'block') {{
+                closeOpPopup();
+            }}
+        }});
+
         // Initialize plots
         document.addEventListener('DOMContentLoaded', function() {{
             // Create memory usage over time graphs
@@ -722,6 +1104,25 @@ class MemoryVisualizer:
             // Create unpadded comparison graph if data available
             if (unpaddedComparisonData && unpaddedComparisonData.traces && unpaddedComparisonData.traces.length > 0) {{
                 Plotly.newPlot('unpadded-comparison-graph', unpaddedComparisonData.traces, unpaddedComparisonData.layout, {{responsive: true}});
+            }}
+
+            // Click handler for memory graph
+            document.getElementById('memory-graphs').on('plotly_click', function(data) {{
+                if (!data.points || !data.points.length) return;
+                var point = data.points[0];
+                if (!point.customdata) return;  // skip capacity line
+                var opIndex = point.x;
+                if (opIndex >= 0 && opIndex < opsData.length) openOpPopup(opIndex);
+            }});
+
+            // Click handler for tile padding graph
+            var unpaddedEl = document.getElementById('unpadded-comparison-graph');
+            if (unpaddedEl && unpaddedEl.data) {{
+                unpaddedEl.on('plotly_click', function(data) {{
+                    if (!data.points || !data.points.length) return;
+                    var opIndex = data.points[0].x;
+                    if (opIndex >= 0 && opIndex < opsData.length) openOpPopup(opIndex);
+                }});
             }}
         }});
     </script>
