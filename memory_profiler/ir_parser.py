@@ -99,7 +99,7 @@ def build_loc_line_index(ir_text: str) -> Dict[str, int]:
     # Step 1: Build alias -> name mapping from definitions
     # Pattern: #loc56 = loc("multiply.3545")
     alias_to_name = {}
-    alias_def_pattern = re.compile(r'(#loc\d+)\s*=\s*loc\("([^"]+)"\)')
+    alias_def_pattern = re.compile(r'(#loc\d+)\s*=\s*loc\("([^"]+)"')
 
     for line in lines:
         match = alias_def_pattern.search(line)
@@ -121,7 +121,7 @@ def build_loc_line_index(ir_text: str) -> Dict[str, int]:
 
     # Step 3: Also handle inline loc("name") patterns for ops without aliases
     # Pattern: loc("something") directly in operation lines
-    inline_loc_pattern = re.compile(r'loc\("([^"]+)"\)')
+    inline_loc_pattern = re.compile(r'loc\("([^"]+)"')
 
     for line_num, line in enumerate(lines, start=1):
         # Skip alias definition lines (they start with #loc)
@@ -131,6 +131,16 @@ def build_loc_line_index(ir_text: str) -> Dict[str, int]:
         for loc_id in matches:
             if loc_id not in loc_index:
                 loc_index[loc_id] = line_num
+
+    # Step 4: Handle ttcore.load_cached operations with loc(unknown)
+    # Map @function_name to the line where load_cached appears
+    load_cached_pattern = re.compile(r'load_cached\((@[\w.]+)')
+    for line_num, line in enumerate(lines, start=1):
+        match = load_cached_pattern.search(line)
+        if match:
+            func_name = match.group(1)  # "@main_const_eval_0"
+            if func_name not in loc_index:
+                loc_index[func_name] = line_num
 
     return loc_index
 

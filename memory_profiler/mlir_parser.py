@@ -293,9 +293,15 @@ def parse_mlir_operation(line: str) -> Optional[Dict]:
     attrs_match = re.search(r"<\{([^}]+)\}>", line)
     attributes = attrs_match.group(1) if attrs_match else None
 
-    # Extract location (e.g., loc("convert.80"))
-    loc_match = re.search(r'loc\("([^"]+)"\)', line)
+    # Extract location (e.g., loc("convert.80") or loc("reduce.864_mean"("reduce.864")))
+    loc_match = re.search(r'loc\("([^"]+)"', line)
     location = loc_match.group(1) if loc_match else None
+
+    # Fallback for load_cached ops with loc(unknown): use @function_name as synthetic location
+    if location is None and "load_cached" in line:
+        func_match = re.search(r'load_cached\((@[\w.]+)', line)
+        if func_match:
+            location = func_match.group(1)  # e.g., "@main_const_eval_0"
 
     # Extract type signatures
     # Format: : (input_types) -> output_type loc(...)
