@@ -923,7 +923,9 @@ class MemoryVisualizer:
             // Scroll to and highlight the line
             const lineElement = document.getElementById(irType + '-line-' + lineNum);
             if (lineElement) {{
-                lineElement.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                const container = lineElement.closest('.ir-content');
+                container.scrollTop = lineElement.offsetTop - container.offsetTop - container.clientHeight / 2;
+                container.scrollLeft = 0;
                 lineElement.classList.add('highlighted');
                 currentHighlightedLine = lineElement;
             }}
