@@ -53,6 +53,12 @@ def _export_ir(module_id: str, modules_json: Path, model_path: str, inputs_path:
         if result.returncode == 0:
             print("OK")
             return True
+        # Subprocess failed but IR files might still be on disk
+        # (e.g., torch_xla atexit crash after successful export)
+        irs_dir = output_dir / "module_irs" / module_id / "irs"
+        if irs_dir.exists() and list(irs_dir.glob("ttir_*.mlir")):
+            print("OK (subprocess exit error ignored)")
+            return True
         print("FAILED")
         if result.stderr:
             for line in result.stderr.decode('utf-8', errors='replace').strip().split('\n')[-3:]:
@@ -88,10 +94,10 @@ def _run_op_by_op(module_id: str, module_irs_dir: Path, project_root: Path) -> D
     env["SYSTEM_DESC_PATH"] = str(project_root / "ttrt-artifacts" / "system_desc.ttsys")
 
     try:
-        result = subprocess.run(cmd, cwd=str(project_root), env=env, timeout=600)
+        result = subprocess.run(cmd, cwd=str(project_root), env=env, timeout=1800)
         returncode = result.returncode
     except subprocess.TimeoutExpired:
-        return {"success": False, "failed_ops": [{"op_name": "TIMEOUT", "error_message": "10min"}],
+        return {"success": False, "failed_ops": [{"op_name": "TIMEOUT", "error_message": "30min"}],
                 "report_path": None, "skipped": False}
     except Exception as e:
         return {"success": False, "failed_ops": [{"op_name": "ERROR", "error_message": str(e)}],

@@ -801,8 +801,8 @@ class MemoryVisualizer:
                     <h2>Peak Memory Analysis</h2>
                     {self._generate_peak_cards_html(peak_analysis)}
 
-                    <!-- Top Memory Consumers -->
-                    <h2>Top 10 Memory-Consuming Operations</h2>
+                    <!-- DRAM Usage Prime Suspects -->
+                    <h2>DRAM Usage Prime Suspects</h2>
                     {self._generate_top_ops_table_html(top_ops)}
                 </div>
             </div>
@@ -1560,7 +1560,7 @@ class MemoryVisualizer:
                     <th>Index</th>
                     <th>Operation</th>
                     <th>Location</th>
-                    <th>DRAM (MB)</th>
+                    <th>DRAM Added (MB)</th>
                     <th>Input Shapes</th>
                     <th>Output Shapes</th>
                 </tr>
@@ -1612,18 +1612,19 @@ class MemoryVisualizer:
         return peaks
 
     def get_top_operations(self, n: int = 10) -> List[Dict]:
-        """Get top N memory-consuming operations (by DRAM)"""
-        ops_with_mem = [
-            {
-                "index": i,
-                "dram": self.mem_data[i]["memory"]["DRAM"][
-                    "totalBytesAllocatedPerBank_MB"
-                ],
-                "operation": self.ops_data[i],
-                "memory": self.mem_data[i],
-            }
-            for i in range(len(self.mem_data))
-        ]
+        """Get top N operations by DRAM delta (largest DRAM increase first)"""
+        ops_with_mem = []
+        for i in range(len(self.mem_data)):
+            current = self.mem_data[i]["memory"]["DRAM"]["totalBytesAllocatedPerBank_MB"]
+            prev = self.mem_data[i - 1]["memory"]["DRAM"]["totalBytesAllocatedPerBank_MB"] if i > 0 else 0
+            delta = current - prev
+            if delta > 0:
+                ops_with_mem.append({
+                    "index": i,
+                    "dram": delta,
+                    "operation": self.ops_data[i],
+                    "memory": self.mem_data[i],
+                })
 
         ops_with_mem.sort(key=lambda x: x["dram"], reverse=True)
         return ops_with_mem[:n]

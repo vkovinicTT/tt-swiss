@@ -6,6 +6,7 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -27,10 +28,10 @@ def main():
     module_info = next((m for m in modules_data["modules"] if m["id"] == args.module_id), None)
     if not module_info:
         print(f"Module {args.module_id} not found")
-        sys.exit(1)
+        os._exit(1)
 
     if module_info["class_name"] in ("Sequential", "ModuleList", "ModuleDict"):
-        sys.exit(0)
+        os._exit(0)
 
     device = setup_tt_device()
     load_fn = load_function_from_path(args.model_path)
@@ -42,15 +43,15 @@ def main():
     submodule = get_module_by_path(model, module_info["module_path"])
     if submodule is None:
         print(f"Could not find module at path '{module_info['module_path']}'")
-        sys.exit(1)
+        os._exit(1)
 
     from module_runner import run_submodule_for_ir
     try:
         success = run_submodule_for_ir(submodule, module_info, Path(args.output_dir), device, inputs_fn)
-        sys.exit(0 if success else 1)
+        os._exit(0 if success else 1)
     except Exception as e:
         print(f"Error exporting IR: {e}")
-        sys.exit(1)
+        os._exit(1)
 
 
 if __name__ == "__main__":
