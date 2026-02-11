@@ -1,8 +1,8 @@
-# ttchop - Full Architecture Report
+# ttchop — Architecture
 
 ## What is ttchop?
 
-`ttchop` is a CLI tool that analyzes PyTorch models to determine which modules and operations are compatible with Tenstorrent hardware. It does this by extracting each unique submodule from a model, exporting its MLIR IR, and running op-by-op tests against the TT backend.
+`ttchop` is a CLI tool that analyzes PyTorch models to determine which modules and operations run on Tenstorrent hardware. It extracts each unique submodule, exports its MLIR IR via `torch.compile(backend="tt")`, and runs op-by-op tests against the TT backend. Results are presented as an interactive HTML report and a markdown summary.
 
 **Entry point:** `ttchop = "ttchop.cli:main"` (registered in `pyproject.toml`)
 
@@ -17,15 +17,15 @@ ttchop --model-path file.py::load_model --inputs-path file.py::get_inputs [--dir
 ```
                             ttchop CLI (cli.py)
                                   |
-               +------------------+------------------+
-               |                  |                  |
-         Step 1: Extract    Step 2: Op-by-Op   Step 3: Visualize
-        (module_extractor)  (op_by_op_runner)    (visualizer.py)
-               |                  |                  |
-        unique_modules.json  updated .json     analysis_report.html
+            +------------+--------+--------+------------+
+            |            |                 |            |
+      Step 1: Extract  Step 2: Op-by-Op  Step 3: HTML  Step 4: Summary
+     (module_extractor) (op_by_op_runner) (visualizer)  (summary)
+            |            |                 |            |
+     unique_modules.json updated .json  report.html  summary.md
 ```
 
-### Step 1 - Extract Unique Modules (`module_extractor.py`)
+### Step 1 — Extract Unique Modules (`module_extractor.py`)
 
 ```
 load_fn() --> model       inputs_fn() --> sample_input
@@ -46,54 +46,67 @@ load_fn() --> model       inputs_fn() --> sample_input
               |
    For each named_module in model:
      - Get class_name, shapes, dtypes, parameters
-     - Compute uniqueness_key = class + shapes + params
-       (containers use path as key instead)
+     - Compute uniqueness_key
      - Group by uniqueness key
               |
    unique_modules.json
-   {metadata: {...}, modules: [{id, class_name, module_path, parent, shapes, ...}]}
 ```
 
 **Uniqueness key formula:**
 - Regular modules: `class_name || sorted_input_shapes || sorted_output_shapes || json(params)`
 - Containers (Sequential/ModuleList/ModuleDict): `class_name || PATH:actual_path`
 
-### Step 2 - Hierarchical Op-by-Op Analysis (`op_by_op_runner.py`)
+**Module ID naming:** `generate_module_id(index, module_path)` extracts the last segment of the dotted path as the directory name. Example: `"res_blocks.0.conv1"` → `mod_004_conv1`, `"full_model"` → `mod_000_full_model`.
 
-This is the core of ttchop. It builds a tree from the flat modules list and recursively tests each module.
+**Root module:** The root module (unnamed in `named_modules()`) is assigned the path `"full_model"`.
+
+### Step 2 — Hierarchical Op-by-Op Analysis (`op_by_op_runner.py`)
+
+Builds an N-ary tree from the flat modules list and recursively tests each module with lazy IR export.
 
 ```
 unique_modules.json
         |
-  build_module_tree()    (module_tree.py)
+  build_module_tree()         (module_tree.py)
         |
   ModuleNode tree (N-ary)
         |
   run_hierarchical_op_by_op()
         |
-  _ensure_system_desc()   <-- generates ttrt-artifacts/system_desc.ttsys if missing
+  _ensure_system_desc()       generates ttrt-artifacts/system_desc.ttsys if missing
         |
-  analyze(root, is_root_call=True)   <-- recursive function (details below)
+  analyze(root, is_root_call=True)   recursive (see details below)
         |
-  _update_container_status(root)     <-- post-order: set container status from children
+  _update_container_status(root)     post-order: set container status from children
         |
   Updated unique_modules.json with status per module
 ```
 
-### Step 3 - Visualization (`visualizer.py`)
+### Step 3 — HTML Visualization (`visualizer.py`)
 
-Reads the updated `unique_modules.json` and generates a self-contained HTML report with:
-- Collapsible tree view with status-colored indicators
-- Module detail panels (shapes, dtypes, parameters, failed ops)
-- Summary statistics
+Reads the updated `unique_modules.json` and generates a self-contained HTML report:
+
+- **Collapsible tree view** with status-colored dot indicators
+- **Module detail panel** — shapes, dtypes, parameters, IR file buttons
+- **File viewer overlay** — view MLIR IR files, logs, and op-by-op reports inline
+- **Collapsible error boxes** — failed ops show truncated preview, click to expand full trace
+- **Op-to-TTIR linking** — clicking an op in the report switches to TTIR tab and highlights the corresponding line
+- **Light/dark theme toggle** with `localStorage` persistence
+
+### Step 4 — Markdown Summary (`summary.py`)
+
+Generates a `summary.md` alongside the HTML report:
+
+- Status table with merged success counts (success + inherited_success = "Success")
+- Failed modules listed by `ClassName (path)` format (no module IDs)
+- Container modules list their failed children instead of individual ops
+- Detailed report section with full error traces per failed op (from parsed log blocks)
 
 ---
 
-## The `analyze()` Recursive Function - Core Logic
+## The `analyze()` Recursive Function
 
-This is the heart of the tool. Located in `op_by_op_runner.py:182-249`.
-
-For each module node, it performs two subprocess calls:
+Located in `op_by_op_runner.py`. For each module node, it performs two subprocess calls:
 
 ### Subprocess 1: IR Export (`_export_ir`)
 
@@ -103,23 +116,23 @@ Parent process                          Subprocess
      +--- subprocess.run() --------------> ir_export_single_module.py
           timeout=300s                       |
                                       Load model via load_fn()
-                                      Find submodule by path
+                                      Find submodule via get_module_by_path()
                                              |
                                       module_runner.py:run_submodule_for_ir()
                                              |
                                       torch_xla.set_custom_compile_options({
-                                        export_path: module_irs/mod_XXX/,
-                                        export_model_name: mod_XXX_ClassName
+                                        export_path: module_irs/mod_XXX_name/,
+                                        export_model_name: mod_XXX_name
                                       })
                                              |
                                       torch.compile(submodule, backend="tt")
                                              |
                                       Forward pass (generates MLIR)
                                              |
-                                      Output: module_irs/mod_XXX/irs/ttir_*.mlir
+                                      Output: module_irs/mod_XXX_name/irs/ttir_*.mlir
 ```
 
-**Key detail:** Runtime failures during the forward pass are tolerated - the MLIR IR files are exported during compilation, before execution, so they're available even if the run crashes.
+**Key detail:** Runtime failures during the forward pass are tolerated. MLIR IR files are exported during compilation, before execution. If TTIR files exist on disk despite a non-zero exit code, the export is considered successful.
 
 ### Subprocess 2: Op-by-Op Test (`_run_op_by_op`)
 
@@ -127,26 +140,23 @@ Parent process                          Subprocess
 Parent process                            Subprocess
      |                                        |
      +--- subprocess.run() --------------->  pytest -svv
-          timeout=600s                        tests/op_by_op/op_by_op_test.py::test_op_by_op
-          cwd=tt-xla root                     --folder=module_irs/mod_XXX
+          timeout=1800s                       tests/op_by_op/op_by_op_test.py::test_op_by_op
+          cwd=tt-xla root                     --folder=module_irs/mod_XXX_name
           env:                                --ir-file-prefix=irs/ttir_
             PYTHONPATH += tests/              --json-report
-              + tt-mlir python pkgs           --json-report-file=mod_XXX_op_by_op_report.json
+              + tt-mlir python pkgs           --json-report-file=...report.json
             SYSTEM_DESC_PATH=                     |
-              ttrt-artifacts/system_desc      Reads each ttir_*.mlir file
-                                              Tests each op individually on TT hardware
-                                              Writes pytest-json-report with per-op results
-                                                  |
-                                              Report parsed by _parse_report()
-                                              Extracts: op_name, error_message, inputs, outputs
-                                              for each failed op
+              ttrt-artifacts/system_desc      Tests each op individually on TT hardware
+                                              Writes pytest-json-report
 ```
+
+After the test completes, the execution log is parsed by `log_parser.py` to extract detailed per-op error traces (TT_FATAL messages with full backtraces). These are saved as `*_op_by_op_parsed.json` and used by both the HTML visualizer and the markdown summary.
 
 ---
 
-## Decision Tree: `--root-only` vs Default (Full Recursive)
+## Decision Tree: `--root-only` vs Default
 
-### Without `--root-only` (default)
+### Default (full recursive)
 
 ```
 analyze(node)
@@ -164,80 +174,37 @@ analyze(node)
     |       |
     |       +-- SUCCESS --> status = "success"
     |       |               mark ALL descendants = "inherited_success"
-    |       |               STOP recursion (children don't need testing)
+    |       |               STOP recursion
     |       |
     |       +-- FAILED --> status = "failed"
     |                      record failed_ops list
-    |                      recurse to all children (find which sub-parts fail)
+    |                      recurse to all children
 ```
-
-**Behavior:** Top-down recursive. Success propagates down (children inherit). Failure triggers deeper investigation into submodules. This gives you a full compatibility map.
 
 ### With `--root-only`
 
 ```
 analyze(node, is_root_call)
     |
-    +-- NOT root call? --> SKIP entire subtree immediately
-    |                      (all descendants = "skipped")
+    +-- NOT root call? --> mark entire subtree "skipped"
     |
-    +-- (root call only below this point)
-    |
-    +-- Is container? --> status = "skipped", recurse children
-    |                     (but children hit the NOT root check above --> skipped)
+    +-- Is container? --> status = "skipped", recurse (children hit NOT root check)
     |
     +-- Export IR
-    |       FAILED --> status = "ir_export_failed"
-    |                  all children = "skipped" (no drill-down)
+    |       FAILED --> status = "ir_export_failed", children = "skipped"
     |
-    +-- Run op-by-op test
-            |
-            +-- SUCCESS --> status = "success"
-            |               all children = "skipped" (NOT inherited_success)
-            |
-            +-- FAILED --> status = "failed"
-                           record failed_ops
-                           all children = "skipped" (no drill-down)
+    +-- Run op-by-op
+            SUCCESS --> status = "success", children = "skipped"
+            FAILED  --> status = "failed", children = "skipped"
 ```
 
-**Behavior:** Only tests the root module. All children are marked "skipped" regardless of outcome. No recursive drill-down on failure.
-
-### Side-by-Side Comparison
-
-```
-                    Default (full)              --root-only
-                    +-----------+               +-----------+
-                    |  Root: A  |               |  Root: A  |
-                    |  FAILED   |               |  FAILED   |
-                    +-----+-----+               +-----+-----+
-                          |                           |
-               +----------+----------+     +----------+----------+
-               |          |          |     |          |          |
-          +----+----+ +---+---+ +---+---+  +----+----+ +---+---+ +---+---+
-          | B: test | | C: ok | | D: err|  |B: skip  | |C: skip| |D: skip|
-          | FAILED  | |SUCCESS| |IR_FAIL|  |         | |       | |       |
-          +----+----+ +---+---+ +---+---+  +---------+ +-------+ +-------+
-               |         inh.     drill
-          +----+----+  success   deeper
-          |E: test  |
-          | SUCCESS |
-          +---------+
-           (found the
-            failing leaf)
-```
-
-### Comparison Table
-
-| Aspect | Default (full) | `--root-only` |
-|--------|---------------|---------------|
-| **Modules tested** | All, recursively | Root only |
-| **On success** | Children get `inherited_success` | Children get `skipped` |
-| **On failure** | Recurse to children to isolate | Stop, children `skipped` |
-| **On IR export fail** | Recurse to children | Stop, children `skipped` |
-| **Subprocess count** | Up to 2N (N=unique modules) | 2 (1 IR export + 1 test) |
-| **Speed** | Slower (comprehensive) | Fast (single module) |
-| **Use case** | Full compatibility audit | Quick root-level check |
-| **Status values used** | success, inherited_success, failed, ir_export_failed, skipped | success, failed, ir_export_failed, skipped |
+| Aspect | Default | `--root-only` |
+|--------|---------|---------------|
+| Modules tested | All, recursively | Root only |
+| On success | Children get `inherited_success` | Children get `skipped` |
+| On failure | Recurse to isolate failing leaf | Stop, children `skipped` |
+| Subprocess count | Up to 2N | 2 |
+| Use case | Full compatibility audit | Quick root-level check |
 
 ---
 
@@ -245,43 +212,71 @@ analyze(node, is_root_call)
 
 | Status | Meaning | Set by |
 |--------|---------|--------|
-| `success` | Module passed op-by-op test directly | `analyze()` on test pass |
+| `success` | Module passed op-by-op directly | `analyze()` on test pass |
 | `inherited_success` | Parent passed, no need to test | `_mark_subtree_success()` |
-| `failed` | Op-by-op test failed (has `failed_ops` list) | `analyze()` on test fail |
+| `failed` | Op-by-op test failed (has `failed_ops`) | `analyze()` on test fail |
 | `ir_export_failed` | Could not export MLIR IR | `analyze()` on export fail |
-| `skipped` | Container type, no TTIR files, or `--root-only` | Various |
+| `skipped` | Container, no TTIR files, or `--root-only` | Various |
 
-**Post-order container update** (`_update_container_status`):
-- If any child is `failed` or `ir_export_failed` --> container = `failed`
-- If all children are `success`/`inherited_success` --> container = `inherited_success`
-- If some children succeed --> container = `inherited_success`
-- Otherwise --> `skipped`
+**Container status** (`_update_container_status`, post-order):
+- Any child `failed` or `ir_export_failed` → container = `failed`
+- All children `success`/`inherited_success` → container = `inherited_success`
+- Mixed → container = `inherited_success`
+- No children with status → `skipped`
+
+---
+
+## Log Parser (`log_parser.py`)
+
+Parses raw `op_by_op.log` files into structured per-op execution blocks:
+
+```
+op_by_op.log
+     |
+  parse_op_by_op_log()
+     |
+  For each "Starting execution of program: main" block:
+     - Track sub-program depth (main_const_eval_0 etc.)
+     - Record last "Executing operation: ttnn.xxx" at top level
+     - Detect TT_FATAL errors → extract error_message + full error_trace
+     - Error trace collection stops at non-trace lines
+       (timestamps, "Always | DEBUG" lines)
+     |
+  List of {success, last_ttnn_op, error_message, error_trace}
+```
+
+**Key design:** The parser distinguishes top-level program executions from nested sub-programs by tracking depth. Error traces are collected only within the backtrace block — lines starting with `---`, `info:`, `backtrace:`, or lines without timestamp/`Always |` prefix.
 
 ---
 
 ## Output Directory Structure
 
 ```
-<output_dir>/                        (default: ./<ModelClassName>/)
+<output_dir>/                               (default: ./<ModelClassName>/)
   |
-  +-- unique_modules.json            Step 1 output, updated in Step 2 with status
+  +-- unique_modules.json                   Steps 1+2 output (modules + status)
   |
   +-- module_irs/
-  |     +-- mod_000/
+  |     +-- mod_000_full_model/
   |     |     +-- irs/
-  |     |     |     +-- ttir_0_mod_000_ClassName.mlir
-  |     |     |     +-- ttir_1_mod_000_ClassName.mlir
-  |     |     +-- mod_000_op_by_op_report.json   (pytest-json-report)
-  |     +-- mod_001/
+  |     |     |     +-- ttir_0_mod_000_full_model.mlir
+  |     |     |     +-- ttnn_0_mod_000_full_model.mlir
+  |     |     |     +-- ...
+  |     |     +-- run.log                   IR export stdout/stderr
+  |     |     +-- op_by_op.log              pytest output
+  |     |     +-- mod_000_full_model_op_by_op_report.json
+  |     |     +-- mod_000_full_model_op_by_op_parsed.json
+  |     +-- mod_001_initial_conv/
   |     |     +-- ...
   |     +-- ...
   |
-  +-- analysis_report.html           Step 3 output (self-contained HTML)
+  +-- analysis_report.html                  Step 3 output
+  +-- summary.md                            Step 4 output
 ```
 
 ---
 
-## Full Data Flow Diagram
+## Full Data Flow
 
 ```
 User invocation:
@@ -292,18 +287,19 @@ User invocation:
                  +------------------+------------------+
                  |                                     |
         load_function_from_path()             get_tt_xla_root()
-        (dynamic import of user fns)          (find tt-xla install)
+        (dynamic import via importlib)        (find tt-xla root)
                  |                                     |
                  v                                     v
   ======= STEP 1: EXTRACT ========          project_root (Path)
   extract_unique_modules()
        |
-       +-- load_fn() --> model
+       +-- load_fn() --> model.eval()
        +-- inputs_fn() --> sample_input
        +-- [subprocess] shape_capture_subprocess.py
        |     Runs forward pass on TT device
-       |     Captures per-module input/output shapes
+       |     Returns per-module input/output shapes + device info
        +-- Group by uniqueness key
+       +-- generate_module_id(index, module_path) for each group
        +-- Write unique_modules.json
        |
        v
@@ -315,18 +311,17 @@ User invocation:
        +-- _ensure_system_desc()
        |     [subprocess] ttrt query --save-artifacts
        |
-       +-- analyze(root)  -- recursive --
+       +-- analyze(root, is_root_call=True)
        |     |
        |     +-- [subprocess] ir_export_single_module.py
-       |     |     Loads model, finds submodule
-       |     |     torch.compile(sub, backend="tt")
-       |     |     Forward pass --> exports ttir_*.mlir
+       |     |     Loads model, finds submodule by path
+       |     |     torch.compile(sub, backend="tt") --> exports MLIR
        |     |
        |     +-- [subprocess] pytest op_by_op_test.py
-       |     |     Reads ttir_*.mlir files
-       |     |     Tests each MLIR op on hardware
+       |     |     Tests each TTIR op on hardware
        |     |     Writes json report
        |     |
+       |     +-- parse_op_by_op_log() --> parsed error traces
        |     +-- Mark status, recurse or propagate
        |
        +-- _update_container_status(root)
@@ -337,25 +332,68 @@ User invocation:
   generate_visualization(modules_json)
        |
        +-- Read updated unique_modules.json
-       +-- Build nested tree structure
-       +-- Generate self-contained HTML
+       +-- Collect all module files (IR, logs, reports, parsed traces)
+       +-- Build nested tree structure with file data
+       +-- Generate self-contained HTML with embedded CSS/JS
        +-- Output: analysis_report.html
+       |
+       v
+  ======= STEP 4: SUMMARY ========
+  generate_summary(modules_json)
+       |
+       +-- Read updated unique_modules.json
+       +-- Count statuses (merge success + inherited_success)
+       +-- Collect failed modules with enriched error traces
+       +-- Build markdown with status table, failed modules, detailed report
+       +-- Output: summary.md
 ```
 
 ---
 
-## Key Source Files
+## Shared Constants (`data_types.py`)
+
+| Constant | Value | Used by |
+|----------|-------|---------|
+| `CONTAINER_TYPES` | `("Sequential", "ModuleList", "ModuleDict")` | module_extractor, module_runner, op_by_op_runner, ir_export_single_module, summary |
+| `STATUS_ORDER` | `["failed", "ir_export_failed", "success", "inherited_success", "skipped", "unknown"]` | (available for consumers) |
+| `STATUS_LABELS` | `{status → display name}` | (available for consumers) |
+| `MODULE_ATTRS` | List of 21 PyTorch module attribute names | extract_module_parameters() |
+
+---
+
+## Source Files
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `ttchop/cli.py` | 94 | Entry point, orchestrates 3-step pipeline |
-| `ttchop/module_extractor.py` | 138 | Step 1: Extract unique modules with shape capture |
-| `ttchop/op_by_op_runner.py` | 250 | Step 2: Hierarchical op-by-op with lazy IR export |
-| `ttchop/module_tree.py` | 81 | ModuleNode dataclass, tree builder, status updater |
-| `ttchop/ir_export_single_module.py` | 58 | Subprocess: export IR for one module |
-| `ttchop/module_runner.py` | 86 | torch.compile + forward pass for IR generation |
-| `ttchop/shapes.py` | - | ShapeCapture class (CPU fallback) |
-| `ttchop/shape_capture_subprocess.py` | - | Subprocess: shape capture on TT device |
-| `ttchop/visualizer.py` | - | Step 3: HTML report generation |
-| `ttchop/utils.py` | - | Shared utilities (function loading, device setup) |
-| `ttchop/data_types.py` | - | ModuleInfo dataclass |
+| `cli.py` | 103 | Entry point, orchestrates 4-step pipeline |
+| `module_extractor.py` | 137 | Step 1: Extract unique modules with shape capture |
+| `op_by_op_runner.py` | 305 | Step 2: Hierarchical op-by-op with lazy IR export |
+| `module_tree.py` | 81 | ModuleNode dataclass, tree builder, status updater |
+| `ir_export_single_module.py` | 64 | Subprocess: export IR for one module |
+| `module_runner.py` | 92 | torch.compile + forward pass for IR generation |
+| `shapes.py` | 72 | ShapeCapture class (forward hooks) |
+| `shape_capture_subprocess.py` | 55 | Subprocess: shape capture on TT device |
+| `log_parser.py` | 167 | Parse op-by-op execution logs for per-op error traces |
+| `visualizer.py` | ~600 | Step 3: Interactive HTML report generation |
+| `summary.py` | ~200 | Step 4: Markdown summary generation |
+| `data_types.py` | 69 | ModuleInfo dataclass, shared constants |
+| `utils.py` | 156 | Shared utilities (function loading, device setup, path helpers) |
+
+### Subprocess scripts
+
+Two files are invoked as standalone subprocesses (not via package imports):
+- `ir_export_single_module.py` — exports IR for a single module
+- `shape_capture_subprocess.py` — captures shapes on TT device
+
+These use `sys.path.insert(0, str(Path(__file__).resolve().parent.parent))` to enable `from ttchop.xxx import ...` package imports when run outside the package context.
+
+### `__init__.py` exports
+
+```python
+from .module_extractor import extract_unique_modules
+from .module_tree import ModuleNode, build_module_tree, update_modules_with_status
+from .op_by_op_runner import run_hierarchical_op_by_op
+from .summary import generate_summary
+from .utils import load_function_from_path, setup_tt_device, get_module_by_path
+from .visualizer import generate_visualization
+```

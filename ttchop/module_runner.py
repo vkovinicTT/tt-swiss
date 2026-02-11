@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
-CONTAINER_TYPES = ("Sequential", "ModuleList", "ModuleDict")
+from .data_types import CONTAINER_TYPES
 
 
 def generate_input_for_module(module_info: Dict[str, Any], device: Optional[Any] = None) -> torch.Tensor:
@@ -44,9 +44,15 @@ def run_submodule_for_ir(
     if module_class in CONTAINER_TYPES:
         return False
 
-    # Setup output directory and configure IR export
+    # Setup output directory and clean previous IRs to avoid duplicates
     module_dir = output_dir / "module_irs" / module_id
     module_dir.mkdir(parents=True, exist_ok=True)
+    irs_dir = module_dir / "irs"
+    if irs_dir.exists():
+        import shutil
+        shutil.rmtree(irs_dir)
+    for fb in module_dir.glob("*.ttnn"):
+        fb.unlink()
     torch_xla.set_custom_compile_options({
         "export_path": str(module_dir),
         "export_model_name": f"{module_id}_{module_class}",
@@ -57,7 +63,7 @@ def run_submodule_for_ir(
     compiled = torch.compile(submodule, backend="tt")
 
     # Generate input
-    if module_path == "(root)" and get_sample_input:
+    if module_path in ("(root)", "full_model") and get_sample_input:
         input_data = get_sample_input()
         if isinstance(input_data, dict):
             inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in input_data.items()}

@@ -2,10 +2,22 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Data types for model analysis."""
+"""Data types and shared constants for model analysis."""
 
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
+
+CONTAINER_TYPES = ("Sequential", "ModuleList", "ModuleDict")
+
+STATUS_ORDER = ["failed", "ir_export_failed", "success", "inherited_success", "skipped", "unknown"]
+STATUS_LABELS = {
+    "failed": "Failed",
+    "ir_export_failed": "IR Export Failed",
+    "success": "Success",
+    "inherited_success": "Inherited Success",
+    "skipped": "Skipped",
+    "unknown": "Unknown",
+}
 
 MODULE_ATTRS = [
     "in_channels", "out_channels", "in_features", "out_features", "kernel_size",
@@ -33,8 +45,14 @@ class ModuleInfo:
         return asdict(self)
 
 
-def generate_module_id(index: int) -> str:
-    return f"mod_{index:03d}"
+def generate_module_id(index: int, module_path: str = "") -> str:
+    import re
+    # Use last segment of the path as the name (e.g., "res_blocks.0.conv1" -> "conv1")
+    name = module_path.rsplit(".", 1)[-1] if module_path else ""
+    # Clean bracket notation: "blocks[0]" -> "blocks_0"
+    name = re.sub(r"\[(\d+)\]", r"_\1", name)
+    sanitized = re.sub(r"[^a-zA-Z0-9_]", "", name)[:60]
+    return f"mod_{index:03d}_{sanitized}" if sanitized else f"mod_{index:03d}"
 
 
 def extract_module_parameters(module) -> Dict[str, Any]:

@@ -11,9 +11,9 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+from .data_types import CONTAINER_TYPES
+from .log_parser import parse_op_by_op_log, save_parsed_log
 from .module_tree import ModuleNode
-
-CONTAINER_TYPES = ("Sequential", "ModuleList", "ModuleDict")
 
 
 def _ensure_system_desc(project_root: Path) -> Path:
@@ -47,9 +47,22 @@ def _export_ir(module_id: str, modules_json: Path, model_path: str, inputs_path:
     cmd = [sys.executable, str(script), "--module-id", module_id, "--modules-json", str(modules_json),
            "--model-path", model_path, "--inputs-path", inputs_path, "--output-dir", str(output_dir)]
 
+    module_dir = output_dir / "module_irs" / module_id
+    module_dir.mkdir(parents=True, exist_ok=True)
+    log_file = module_dir / "run.log"
+
     print(f"    Exporting IR for {module_id}...", end=" ", flush=True)
     try:
-        result = subprocess.run(cmd, timeout=300, capture_output=True)
+        result = subprocess.run(cmd, timeout=300, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        output = result.stdout.decode('utf-8', errors='replace')
+
+        with open(log_file, "w") as f:
+            f.write(f"=== Run Log for {module_id} ===\n")
+            f.write(f"Command: {' '.join(cmd)}\n")
+            f.write(f"Return code: {result.returncode}\n\n")
+            if output:
+                f.write(f"=== OUTPUT ===\n{output}\n")
+
         if result.returncode == 0:
             print("OK")
             return True
@@ -59,16 +72,24 @@ def _export_ir(module_id: str, modules_json: Path, model_path: str, inputs_path:
         if irs_dir.exists() and list(irs_dir.glob("ttir_*.mlir")):
             print("OK (subprocess exit error ignored)")
             return True
-        print("FAILED")
-        if result.stderr:
-            for line in result.stderr.decode('utf-8', errors='replace').strip().split('\n')[-3:]:
+        print(f"FAILED (see {log_file})")
+        if output:
+            for line in output.strip().split('\n')[-3:]:
                 print(f"      {line}")
         return False
     except subprocess.TimeoutExpired:
-        print("TIMEOUT")
+        with open(log_file, "w") as f:
+            f.write(f"=== Run Log for {module_id} ===\n")
+            f.write(f"Command: {' '.join(cmd)}\n")
+            f.write(f"TIMEOUT after 300 seconds\n")
+        print(f"TIMEOUT (see {log_file})")
         return False
     except Exception as e:
-        print(f"ERROR: {e}")
+        with open(log_file, "w") as f:
+            f.write(f"=== Run Log for {module_id} ===\n")
+            f.write(f"Command: {' '.join(cmd)}\n")
+            f.write(f"ERROR: {e}\n")
+        print(f"ERROR: {e} (see {log_file})")
         return False
 
 
@@ -93,13 +114,41 @@ def _run_op_by_op(module_id: str, module_irs_dir: Path, project_root: Path) -> D
     ])
     env["SYSTEM_DESC_PATH"] = str(project_root / "ttrt-artifacts" / "system_desc.ttsys")
 
+    log_file = module_irs_dir / "op_by_op.log"
+
     try:
-        result = subprocess.run(cmd, cwd=str(project_root), env=env, timeout=1800)
+        result = subprocess.run(cmd, cwd=str(project_root), env=env, timeout=1800,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        output = result.stdout.decode('utf-8', errors='replace')
         returncode = result.returncode
+
+        with open(log_file, "w") as f:
+            f.write(f"=== Op-by-Op Log for {module_id} ===\n")
+            f.write(f"Command: {' '.join(cmd)}\n")
+            f.write(f"Return code: {returncode}\n\n")
+            if output:
+                f.write(f"=== OUTPUT ===\n{output}\n")
+
+        # Parse execution log for detailed per-op traces
+        parsed_log_path = module_irs_dir / f"{module_id}_op_by_op_parsed.json"
+        try:
+            blocks = parse_op_by_op_log(log_file)
+            save_parsed_log(blocks, parsed_log_path)
+        except Exception:
+            pass  # Non-critical, don't fail the pipeline
+
     except subprocess.TimeoutExpired:
+        with open(log_file, "w") as f:
+            f.write(f"=== Op-by-Op Log for {module_id} ===\n")
+            f.write(f"Command: {' '.join(cmd)}\n")
+            f.write(f"TIMEOUT after 1800 seconds\n")
         return {"success": False, "failed_ops": [{"op_name": "TIMEOUT", "error_message": "30min"}],
                 "report_path": None, "skipped": False}
     except Exception as e:
+        with open(log_file, "w") as f:
+            f.write(f"=== Op-by-Op Log for {module_id} ===\n")
+            f.write(f"Command: {' '.join(cmd)}\n")
+            f.write(f"ERROR: {e}\n")
         return {"success": False, "failed_ops": [{"op_name": "ERROR", "error_message": str(e)}],
                 "report_path": None, "skipped": False}
 

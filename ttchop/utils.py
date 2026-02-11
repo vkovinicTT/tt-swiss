@@ -109,7 +109,7 @@ def get_device_info() -> dict:
 
 def get_module_by_path(model: nn.Module, path: str) -> Optional[nn.Module]:
     """Get submodule by dot-separated path (e.g., 'block.resnets[0].conv1')."""
-    if path in ("(root)", ""):
+    if path in ("(root)", "full_model", ""):
         return model
     try:
         parts, current, i = [], "", 0
@@ -141,8 +141,8 @@ def get_module_by_path(model: nn.Module, path: str) -> Optional[nn.Module]:
 
 
 def get_parent_path(module_path: str) -> Optional[str]:
-    """Get parent module path. Returns None for root, '(root)' for top-level."""
-    if module_path in ("(root)", ""):
+    """Get parent module path. Returns None for root, 'full_model' for top-level."""
+    if module_path in ("(root)", "full_model", ""):
         return None
     last_dot, bracket_depth = -1, 0
     for i, c in enumerate(module_path):
@@ -152,4 +152,4 @@ def get_parent_path(module_path: str) -> Optional[str]:
             bracket_depth -= 1
         elif c == "." and bracket_depth == 0:
             last_dot = i
-    return "(root)" if last_dot == -1 else module_path[:last_dot]
+    return "full_model" if last_dot == -1 else module_path[:last_dot]

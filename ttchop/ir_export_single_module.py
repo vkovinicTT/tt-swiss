@@ -10,7 +10,12 @@ import os
 import sys
 from pathlib import Path
 
-from utils import load_function_from_path, setup_tt_device, get_module_by_path
+# This script runs as a standalone subprocess. Add the parent directory
+# so Python can resolve the ttchop package for normal imports.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from ttchop.utils import load_function_from_path, setup_tt_device, get_module_by_path
+from ttchop.data_types import CONTAINER_TYPES
 
 
 def main():
@@ -30,7 +35,7 @@ def main():
         print(f"Module {args.module_id} not found")
         os._exit(1)
 
-    if module_info["class_name"] in ("Sequential", "ModuleList", "ModuleDict"):
+    if module_info["class_name"] in CONTAINER_TYPES:
         os._exit(0)
 
     device = setup_tt_device()
@@ -45,7 +50,7 @@ def main():
         print(f"Could not find module at path '{module_info['module_path']}'")
         os._exit(1)
 
-    from module_runner import run_submodule_for_ir
+    from ttchop.module_runner import run_submodule_for_ir
     try:
         success = run_submodule_for_ir(submodule, module_info, Path(args.output_dir), device, inputs_fn)
         os._exit(0 if success else 1)

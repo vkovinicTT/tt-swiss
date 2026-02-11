@@ -16,9 +16,8 @@ import torch.nn as nn
 
 from .shapes import ShapeCapture
 from .data_types import ModuleInfo, extract_module_parameters, generate_module_id
+from .data_types import CONTAINER_TYPES
 from .utils import get_parent_path
-
-CONTAINER_TYPES = ("ModuleList", "ModuleDict", "Sequential")
 
 
 def _uniqueness_key(class_name: str, input_shapes: List[str], output_shapes: List[str],
@@ -82,7 +81,7 @@ def extract_unique_modules(
     groups: Dict[str, List[Tuple[str, Dict]]] = {}
 
     for name, module in model.named_modules():
-        path = name or "(root)"
+        path = name or "full_model"
         mod_shapes = shapes.get(path, {"inputs": [], "outputs": []})
         params = extract_module_parameters(module)
         class_name = type(module).__name__
@@ -106,7 +105,7 @@ def extract_unique_modules(
     for i, (_, group) in enumerate(groups.items()):
         first_path, first_data = group[0]
         unique_modules.append(ModuleInfo(
-            id=generate_module_id(i), class_name=first_data["class_name"],
+            id=generate_module_id(i, first_path), class_name=first_data["class_name"],
             module_path=first_path, parent=first_data["parent"],
             input_shapes=first_data["input_shapes"], output_shapes=first_data["output_shapes"],
             input_dtypes=first_data["input_dtypes"], output_dtypes=first_data["output_dtypes"],

@@ -38,8 +38,8 @@ def build_module_tree(modules_data: Dict) -> Optional[ModuleNode]:
     for path, node in nodes.items():
         if node.parent_path is None:
             root = node
-        elif node.parent_path == "(root)" and "(root)" in nodes:
-            nodes["(root)"].children.append(node)
+        elif node.parent_path in ("(root)", "full_model") and node.parent_path in nodes:
+            nodes[node.parent_path].children.append(node)
         elif node.parent_path in nodes:
             nodes[node.parent_path].children.append(node)
         else:

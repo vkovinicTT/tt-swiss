@@ -6,9 +6,14 @@
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
-from utils import load_function_from_path, setup_tt_device, get_device_info
+# This script runs as a standalone subprocess. Add the parent directory
+# so Python can resolve the ttchop package for normal imports.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from ttchop.utils import load_function_from_path, setup_tt_device, get_device_info
 
 
 def main():
@@ -34,7 +39,7 @@ def main():
     print("Getting sample input...")
     sample_input = inputs_fn()
 
-    from shapes import ShapeCapture
+    from ttchop.shapes import ShapeCapture
     print("Capturing shapes on TT device...")
     shapes = ShapeCapture(model).run(sample_input, device=device)
     torch_xla.sync()

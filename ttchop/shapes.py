@@ -32,7 +32,7 @@ class ShapeCapture:
         self.shapes.clear()
 
         for name, module in self.model.named_modules():
-            path = name or "(root)"
+            path = name or "full_model"
 
             def pre_hook(p):
                 def hook(mod, inputs):

@@ -88,6 +88,15 @@ def main():
     except Exception as e:
         print(f"Warning: {e}")
 
+    # Step 4: Markdown summary
+    print(f"\n{'='*60}\nStep 4: Generating markdown summary\n{'='*60}")
+    try:
+        from .summary import generate_summary
+        summary = generate_summary(modules_json)
+        print(f"Summary: {summary}")
+    except Exception as e:
+        print(f"Warning: {e}")
+
 
 if __name__ == "__main__":
     main()
