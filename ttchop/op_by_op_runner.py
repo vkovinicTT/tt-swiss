@@ -100,9 +100,11 @@ def _run_op_by_op(module_id: str, module_irs_dir: Path, project_root: Path) -> D
         return {"success": True, "failed_ops": [], "report_path": None, "skipped": True}
 
     report_path = module_irs_dir / f"{module_id}_op_by_op_report.json"
+    failed_ops_dir = module_irs_dir / "failed_ops"
     cmd = ["pytest", "-svv", "tests/op_by_op/op_by_op_test.py::test_op_by_op",
            f"--folder={module_irs_dir}", "--ir-file-prefix=irs/ttir_",
-           "--json-report", f"--json-report-file={report_path}"]
+           "--json-report", f"--json-report-file={report_path}",
+           f"--failed-ops-folder={failed_ops_dir}"]
 
     print(f"    Running: {' '.join(cmd)}")
 
@@ -181,6 +183,7 @@ def _parse_report(report_path: Path) -> List[Dict[str, Any]]:
                             "error_message": value.get("error_message"),
                             "inputs": value.get("inputs", ""),
                             "outputs": value.get("outputs", ""),
+                            "op_params": value.get("op_params", ""),
                         })
     return failed_ops
 

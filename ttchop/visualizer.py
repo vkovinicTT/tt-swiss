@@ -42,8 +42,8 @@ def _read_file_safe(path: Path) -> Optional[str]:
 
 
 def _collect_module_files(module_dir: Path, module_id: str) -> Dict[str, Any]:
-    """Collect all files for a module (log, IRs, op-by-op report)."""
-    files = {"ir_files": {}, "log": None, "op_by_op_report": None, "op_by_op_log": None, "op_by_op_parsed": None}
+    """Collect all files for a module (log, IRs, op-by-op report, failed ops)."""
+    files = {"ir_files": {}, "failed_ops": {}, "log": None, "op_by_op_report": None, "op_by_op_log": None, "op_by_op_parsed": None}
 
     log_file = module_dir / "run.log"
     if log_file.exists():
@@ -67,6 +67,14 @@ def _collect_module_files(module_dir: Path, module_id: str) -> Dict[str, Any]:
             name = mlir_file.stem
             ir_type = _classify_ir_file(name)
             files["ir_files"][ir_type] = {
+                "name": mlir_file.name,
+                "content": _read_file_safe(mlir_file),
+            }
+
+    failed_ops_dir = module_dir / "failed_ops"
+    if failed_ops_dir.exists():
+        for mlir_file in sorted(failed_ops_dir.glob("*.mlir")):
+            files["failed_ops"][mlir_file.stem] = {
                 "name": mlir_file.name,
                 "content": _read_file_safe(mlir_file),
             }
@@ -202,6 +210,16 @@ def _generate_html(data: Dict, tree: Dict) -> str:
     </div>
     <div class="viewer-tabs" id="viewer-tabs"></div>
     <div class="viewer-body" id="viewer-body"></div>
+  </div>
+</div>
+<div class="viewer-overlay" id="fo-viewer" style="display:none">
+  <div class="viewer">
+    <div class="viewer-header">
+      <div class="viewer-title" id="fo-viewer-title"></div>
+      <button class="viewer-close" onclick="closeFoViewer()">&times;</button>
+    </div>
+    <div class="viewer-tabs" id="fo-viewer-tabs"></div>
+    <div class="viewer-body" id="fo-viewer-body"></div>
   </div>
 </div>
 <script>
@@ -375,12 +393,14 @@ function details(n){
 
   // File viewer buttons
   const f=n.files||{};
-  const hasFiles=f.log||f.op_by_op_log||f.op_by_op_report||Object.keys(f.ir_files||{}).length;
+  const hasFiles=f.log||f.op_by_op_log||f.op_by_op_report||Object.keys(f.ir_files||{}).length||Object.keys(f.failed_ops||{}).length;
   if(hasFiles){
     h+='<div class="row"><div class="lbl">Files</div><div class="files-row">';
     if(f.op_by_op_report)h+='<button class="file-btn" onclick="openViewer(sel,\\'report\\')"><span class="icon">&#128202;</span>Op-by-Op Report</button>';
     if(f.log)h+='<button class="file-btn" onclick="openViewer(sel,\\'log\\')"><span class="icon">&#128196;</span>Run Log</button>';
     if(f.op_by_op_log)h+='<button class="file-btn" onclick="openViewer(sel,\\'op_log\\')"><span class="icon">&#128196;</span>Op-by-Op Log</button>';
+    const failedOps=f.failed_ops||{};
+    if(Object.keys(failedOps).length)h+='<button class="file-btn" onclick="openFoViewer(sel)"><span class="icon">&#128683;</span>Failed Ops IR ('+Object.keys(failedOps).length+')</button>';
     const irs=f.ir_files||{};
     const ordered=[...irOrder.filter(k=>irs[k]),...Object.keys(irs).filter(k=>!irOrder.includes(k))];
     ordered.forEach(k=>{
@@ -585,13 +605,44 @@ function jumpToTtirOp(opName,opIdx){
   },50);
 }
 
+let foNode=null,foTab=null;
+function openFoViewer(n){
+  foNode=n;
+  const fo=n.files&&n.files.failed_ops||{};
+  const keys=Object.keys(fo).sort();
+  if(!keys.length)return;
+  foTab='fo_'+keys[0];
+  document.getElementById('fo-viewer').style.display='flex';
+  document.getElementById('fo-viewer-title').textContent=n.id+' ('+n.class_name+') — Failed Ops IR';
+  renderFoTabs(n,foTab);
+  renderFoContent(n,foTab);
+}
+function closeFoViewer(){document.getElementById('fo-viewer').style.display='none';foNode=null;foTab=null}
+function switchFoTab(tab){foTab=tab;renderFoTabs(foNode,tab);renderFoContent(foNode,tab)}
+function renderFoTabs(n,activeTab){
+  const fo=(n.files&&n.files.failed_ops)||{};
+  let h='';
+  Object.keys(fo).sort().forEach(k=>{
+    const key='fo_'+k;
+    const label=fo[k].name||k;
+    h+='<div class="vtab'+(activeTab===key?' active':'')+'" onclick="switchFoTab(\\''+key+'\\')">'+esc(label)+'</div>';
+  });
+  document.getElementById('fo-viewer-tabs').innerHTML=h;
+}
+function renderFoContent(n,tab){
+  const body=document.getElementById('fo-viewer-body');
+  const key=tab.slice(3);
+  const fo=((n.files&&n.files.failed_ops)||{})[key];
+  body.innerHTML=fo?renderCode(fo.content||'Empty file'):renderCode('File not found');
+}
+
 function r(l,v,m=0){return '<div class="row"><div class="lbl">'+esc(l)+'</div><div class="val'+(m?' mono':'')+'">'+v+'</div></div>'}
 function esc(s){if(s==null)return '';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 
 document.addEventListener('DOMContentLoaded',()=>{
   const c=document.getElementById('tree');if(treeData)render(treeData,c,true);details(null);
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeViewer()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeFoViewer();closeViewer()}});
 
 function toggleTheme(){
   document.body.classList.toggle('light');

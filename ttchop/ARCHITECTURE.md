@@ -88,19 +88,24 @@ Reads the updated `unique_modules.json` and generates a self-contained HTML repo
 
 - **Collapsible tree view** with status-colored dot indicators
 - **Module detail panel** — shapes, dtypes, parameters, IR file buttons
-- **File viewer overlay** — view MLIR IR files, logs, and op-by-op reports inline
+- **File viewer overlay** — view MLIR IR files, logs, op-by-op reports, and failed op MLIR inline
 - **Collapsible error boxes** — failed ops show truncated preview, click to expand full trace
 - **Op-to-TTIR linking** — clicking an op in the report switches to TTIR tab and highlights the corresponding line
+- **Failed Ops IR viewer** — browse individual MLIR modules for each failed op (saved by `--failed-ops-folder`)
 - **Light/dark theme toggle** with `localStorage` persistence
 
 ### Step 4 — Markdown Summary (`summary.py`)
 
-Generates a `summary.md` alongside the HTML report:
+Generates a `summary.md` alongside the HTML report. The summary is **op-centric** — it collects unique failed ops across all modules and presents them in a single table:
 
-- Status table with merged success counts (success + inherited_success = "Success")
-- Failed modules listed by `ClassName (path)` format (no module IDs)
-- Container modules list their failed children instead of individual ops
-- Detailed report section with full error traces per failed op (from parsed log blocks)
+- **Header:** `# ModelName — FAILED (N unique ops)` or `# ModelName — PASSED`
+- **Metadata:** device architecture, mesh shape, date
+- **Failed Ops table** with columns: Op, Inputs, Outputs, Params, Module, Error
+- **Detailed Report** per unique op with backtick-wrapped values and collapsible error traces
+
+**Op deduplication:** Failed ops are deduplicated by `(op_name, inputs, outputs, op_params)`. For each unique op, the deepest module (by tree depth) where it appears is shown. Op params are extracted from TTIR MLIR files by matching on op name and input tensor shapes.
+
+**TTIR attribute extraction:** `summary.py` parses TTIR MLIR files to extract the raw `<{...}>` attribute string for each op. Matching uses `(op_name, TTIR-style input types)` with a name-only fallback. TensorDesc strings from the JSON report are converted to TTIR type signatures (e.g., `tensor<1x128x2x4x4xbf16>`) for matching.
 
 ---
 
@@ -145,12 +150,16 @@ Parent process                            Subprocess
           env:                                --ir-file-prefix=irs/ttir_
             PYTHONPATH += tests/              --json-report
               + tt-mlir python pkgs           --json-report-file=...report.json
-            SYSTEM_DESC_PATH=                     |
-              ttrt-artifacts/system_desc      Tests each op individually on TT hardware
+            SYSTEM_DESC_PATH=                 --failed-ops-folder=.../failed_ops
+              ttrt-artifacts/system_desc          |
+                                              Tests each op individually on TT hardware
                                               Writes pytest-json-report
+                                              Saves failed op MLIR to failed_ops/
 ```
 
-After the test completes, the execution log is parsed by `log_parser.py` to extract detailed per-op error traces (TT_FATAL messages with full backtraces). These are saved as `*_op_by_op_parsed.json` and used by both the HTML visualizer and the markdown summary.
+After the test completes:
+1. The execution log is parsed by `log_parser.py` to extract detailed per-op error traces (TT_FATAL messages with full backtraces). These are saved as `*_op_by_op_parsed.json` and used by both the HTML visualizer and the markdown summary.
+2. Individual MLIR modules for each failed op are saved to `failed_ops/` by the `op_by_op_infra` framework (via `--failed-ops-folder`). Files are named `{global_index:04d}_{sanitized_op_name}.mlir` and contain the last successfully compiled module (TTIR, TTNN, or StableHLO depending on the failure point).
 
 ---
 
@@ -262,6 +271,10 @@ op_by_op.log
   |     |     |     +-- ttir_0_mod_000_full_model.mlir
   |     |     |     +-- ttnn_0_mod_000_full_model.mlir
   |     |     |     +-- ...
+  |     |     +-- failed_ops/               Per-failed-op MLIR modules
+  |     |     |     +-- 0005_ttir_conv3d.mlir
+  |     |     |     +-- 0012_ttir_conv3d.mlir
+  |     |     |     +-- ...
   |     |     +-- run.log                   IR export stdout/stderr
   |     |     +-- op_by_op.log              pytest output
   |     |     +-- mod_000_full_model_op_by_op_report.json
@@ -319,7 +332,7 @@ User invocation:
        |     |
        |     +-- [subprocess] pytest op_by_op_test.py
        |     |     Tests each TTIR op on hardware
-       |     |     Writes json report
+       |     |     Writes json report + failed op MLIR files
        |     |
        |     +-- parse_op_by_op_log() --> parsed error traces
        |     +-- Mark status, recurse or propagate
@@ -332,7 +345,7 @@ User invocation:
   generate_visualization(modules_json)
        |
        +-- Read updated unique_modules.json
-       +-- Collect all module files (IR, logs, reports, parsed traces)
+       +-- Collect all module files (IR, logs, reports, parsed traces, failed op MLIR)
        +-- Build nested tree structure with file data
        +-- Generate self-contained HTML with embedded CSS/JS
        +-- Output: analysis_report.html
@@ -342,9 +355,9 @@ User invocation:
   generate_summary(modules_json)
        |
        +-- Read updated unique_modules.json
-       +-- Count statuses (merge success + inherited_success)
-       +-- Collect failed modules with enriched error traces
-       +-- Build markdown with status table, failed modules, detailed report
+       +-- Collect unique failed ops across all modules (dedup by op signature)
+       +-- Enrich each op with TTIR attributes and error traces from parsed logs
+       +-- Build markdown with header, failed ops table, detailed report
        +-- Output: summary.md
 ```
 
@@ -365,19 +378,19 @@ User invocation:
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `cli.py` | 103 | Entry point, orchestrates 4-step pipeline |
-| `module_extractor.py` | 137 | Step 1: Extract unique modules with shape capture |
-| `op_by_op_runner.py` | 305 | Step 2: Hierarchical op-by-op with lazy IR export |
-| `module_tree.py` | 81 | ModuleNode dataclass, tree builder, status updater |
-| `ir_export_single_module.py` | 64 | Subprocess: export IR for one module |
-| `module_runner.py` | 92 | torch.compile + forward pass for IR generation |
+| `cli.py` | 102 | Entry point, orchestrates 4-step pipeline |
+| `module_extractor.py` | 136 | Step 1: Extract unique modules with shape capture |
+| `op_by_op_runner.py` | 307 | Step 2: Hierarchical op-by-op with lazy IR export |
+| `module_tree.py` | 80 | ModuleNode dataclass, tree builder, status updater |
+| `ir_export_single_module.py` | 63 | Subprocess: export IR for one module |
+| `module_runner.py` | 91 | torch.compile + forward pass for IR generation |
 | `shapes.py` | 72 | ShapeCapture class (forward hooks) |
-| `shape_capture_subprocess.py` | 55 | Subprocess: shape capture on TT device |
-| `log_parser.py` | 167 | Parse op-by-op execution logs for per-op error traces |
-| `visualizer.py` | ~600 | Step 3: Interactive HTML report generation |
-| `summary.py` | ~200 | Step 4: Markdown summary generation |
+| `shape_capture_subprocess.py` | 59 | Subprocess: shape capture on TT device |
+| `log_parser.py` | 166 | Parse op-by-op execution logs for per-op error traces |
+| `visualizer.py` | 635 | Step 3: Interactive HTML report with failed ops IR viewer |
+| `summary.py` | 349 | Step 4: Op-centric markdown summary with TTIR attribute extraction |
 | `data_types.py` | 69 | ModuleInfo dataclass, shared constants |
-| `utils.py` | 156 | Shared utilities (function loading, device setup, path helpers) |
+| `utils.py` | 155 | Shared utilities (function loading, device setup, path helpers) |
 
 ### Subprocess scripts
 
@@ -396,4 +409,11 @@ from .op_by_op_runner import run_hierarchical_op_by_op
 from .summary import generate_summary
 from .utils import load_function_from_path, setup_tt_device, get_module_by_path
 from .visualizer import generate_visualization
+
+__all__ = [
+    "extract_unique_modules", "generate_summary", "generate_visualization",
+    "ModuleNode", "build_module_tree", "update_modules_with_status",
+    "run_hierarchical_op_by_op", "load_function_from_path", "setup_tt_device",
+    "get_module_by_path",
+]
 ```
