@@ -1,5 +1,8 @@
 # TT Swiss - A swiss army knife for model bringup 🇨🇭
 
+<img src="media/tt-swiss-img.png" alt="TT Swiss" width="600"/>
+
+
 This repo is a collection of all of the useful tools for enabling models to work on TT hardware. This includes:
 1. Memory profiler `ttmem` - useful for look at memory usage of the model. Signs that you need this - errors like `Out of Memory: Not enough space to allocate <nbytes> B DRAM buffer across <nbanks> banks`
 
