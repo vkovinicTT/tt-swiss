@@ -19,11 +19,14 @@ ttchop --model-path file.py::load_model --inputs-path file.py::get_inputs [--dir
                                   |
             +------------+--------+--------+------------+
             |            |                 |            |
-      Step 1: Extract  Step 2: Op-by-Op  Step 3: HTML  Step 4: Summary
-     (module_extractor) (op_by_op_runner) (visualizer)  (summary)
-            |            |                 |            |
-     unique_modules.json updated .json  report.html  summary.md
+      Step 1: Extract  Step 2: Op-by-Op  Step 3: Summary  Step 4: HTML
+     (module_extractor) (op_by_op_runner)  (summary)       (visualizer)
+            |            |                 |               |
+     unique_modules.json updated .json  summary.md     report.html
 ```
+
+Note: summary runs before visualization so the HTML can embed the rendered summary.
+
 
 ### Step 1 — Extract Unique Modules (`module_extractor.py`)
 
@@ -82,30 +85,33 @@ unique_modules.json
   Updated unique_modules.json with status per module
 ```
 
-### Step 3 — HTML Visualization (`visualizer.py`)
+### Step 3 — Markdown Summary (`summary.py`)
+
+Generates `summary.md` before the HTML visualization (so HTML can embed it). The summary is **op-centric** — it collects unique failed ops across all modules and presents them in a single table:
+
+- **Header:** `# ModelName — FAILED (N unique ops)` or `# ModelName — PASSED`
+- **Metadata:** device architecture, mesh shape, date
+- **Failed Ops table** with columns: Op, Inputs, Outputs, Params, Module, Error
+  - Params and Error cells are wrapped in scrollable `<div>` elements for readability
+  - Error column shows full `error_trace` (with backtrace) when available, falling back to short error message
+
+**Op deduplication:** Failed ops are deduplicated by `(op_name, inputs, outputs, op_params)`. For each unique op, the deepest module (by tree depth) where it appears is shown. Op params are extracted from TTIR MLIR files by matching on op name and input tensor shapes.
+
+**Error matching:** `_find_matching_parsed_error()` matches report failures to parsed log errors by op name similarity (`ttir.X` → `ttnn.X` in `last_ttnn_op`), with a fallback to the first unused parsed failure.
+
+**TTIR attribute extraction:** `summary.py` parses TTIR MLIR files to extract the raw `<{...}>` attribute string for each op. Matching uses `(op_name, TTIR-style input types)` with a name-only fallback. TensorDesc strings from the JSON report are converted to TTIR type signatures (e.g., `tensor<1x128x2x4x4xbf16>`) for matching.
+
+### Step 4 — HTML Visualization (`visualizer.py`)
 
 Reads the updated `unique_modules.json` and generates a self-contained HTML report:
 
 - **Collapsible tree view** with status-colored dot indicators
 - **Module detail panel** — shapes, dtypes, parameters, IR file buttons
-- **File viewer overlay** — view MLIR IR files, logs, op-by-op reports, and failed op MLIR inline
-- **Collapsible error boxes** — failed ops show truncated preview, click to expand full trace
-- **Op-to-TTIR linking** — clicking an op in the report switches to TTIR tab and highlights the corresponding line
-- **Failed Ops IR viewer** — browse individual MLIR modules for each failed op (saved by `--failed-ops-folder`)
+- **File viewer overlay** — view MLIR IR files, logs, and op-by-op reports inline
+- **Op-by-op report view** — table of all ops with pass/fail status, aligned with parsed log data for correct error attribution (handles index mismatches between report and parsed blocks)
+- **Failed Ops IR viewer** — separate overlay to browse individual MLIR modules for each failed op (saved by `--failed-ops-folder`)
+- **Summary view** — embedded rendered summary (markdown converted to HTML server-side via `_markdown_to_html()`) with styled scrollable error cells
 - **Light/dark theme toggle** with `localStorage` persistence
-
-### Step 4 — Markdown Summary (`summary.py`)
-
-Generates a `summary.md` alongside the HTML report. The summary is **op-centric** — it collects unique failed ops across all modules and presents them in a single table:
-
-- **Header:** `# ModelName — FAILED (N unique ops)` or `# ModelName — PASSED`
-- **Metadata:** device architecture, mesh shape, date
-- **Failed Ops table** with columns: Op, Inputs, Outputs, Params, Module, Error
-- **Detailed Report** per unique op with backtick-wrapped values and collapsible error traces
-
-**Op deduplication:** Failed ops are deduplicated by `(op_name, inputs, outputs, op_params)`. For each unique op, the deepest module (by tree depth) where it appears is shown. Op params are extracted from TTIR MLIR files by matching on op name and input tensor shapes.
-
-**TTIR attribute extraction:** `summary.py` parses TTIR MLIR files to extract the raw `<{...}>` attribute string for each op. Matching uses `(op_name, TTIR-style input types)` with a name-only fallback. TensorDesc strings from the JSON report are converted to TTIR type signatures (e.g., `tensor<1x128x2x4x4xbf16>`) for matching.
 
 ---
 
@@ -244,7 +250,12 @@ op_by_op.log
      |
   parse_op_by_op_log()
      |
-  For each "Starting execution of program: main" block:
+  Block boundaries:
+     START: "evaluating binary="    (printed by ttrt once per op, 1:1 with report)
+     END:   "PASS: test case=" or "ERROR: test case="
+     |
+  Within each block:
+     - Track "Starting execution of program: main" (may not appear if op fails pre-execution)
      - Track sub-program depth (main_const_eval_0 etc.)
      - Record last "Executing operation: ttnn.xxx" at top level
      - Detect TT_FATAL errors → extract error_message + full error_trace
@@ -254,7 +265,9 @@ op_by_op.log
   List of {success, last_ttnn_op, error_message, error_trace}
 ```
 
-**Key design:** The parser distinguishes top-level program executions from nested sub-programs by tracking depth. Error traces are collected only within the backtrace block — lines starting with `---`, `info:`, `backtrace:`, or lines without timestamp/`Always |` prefix.
+**Key design:** Blocks are delimited by `"evaluating binary="` (start) and `"PASS/ERROR: test case="` (end) markers, which are printed once per op by the `ttrt` runner. This ensures 1:1 correspondence with report JSON entries. Some ops may crash during input tensor setup (e.g., OOM in `toLayout()`) before runtime execution starts — the `"evaluating binary="` marker captures these pre-execution failures that would be missed by using `"Starting execution of program: main"` as the block boundary.
+
+Within each block, the parser tracks whether runtime execution was reached (`in_execution` flag) and distinguishes top-level program execution from nested sub-programs by tracking depth. Error traces are collected only within the backtrace block — lines starting with `---`, `info:`, `backtrace:`, or lines without timestamp/`Always |` prefix.
 
 ---
 
@@ -283,8 +296,8 @@ op_by_op.log
   |     |     +-- ...
   |     +-- ...
   |
-  +-- analysis_report.html                  Step 3 output
-  +-- summary.md                            Step 4 output
+  +-- summary.md                            Step 3 output
+  +-- analysis_report.html                  Step 4 output
 ```
 
 ---
@@ -341,24 +354,25 @@ User invocation:
        +-- update_modules_with_status() --> write updated JSON
        |
        v
-  ======= STEP 3: VISUALIZE ========
-  generate_visualization(modules_json)
-       |
-       +-- Read updated unique_modules.json
-       +-- Collect all module files (IR, logs, reports, parsed traces, failed op MLIR)
-       +-- Build nested tree structure with file data
-       +-- Generate self-contained HTML with embedded CSS/JS
-       +-- Output: analysis_report.html
-       |
-       v
-  ======= STEP 4: SUMMARY ========
+  ======= STEP 3: SUMMARY ========
   generate_summary(modules_json)
        |
        +-- Read updated unique_modules.json
        +-- Collect unique failed ops across all modules (dedup by op signature)
        +-- Enrich each op with TTIR attributes and error traces from parsed logs
-       +-- Build markdown with header, failed ops table, detailed report
+       +-- Build markdown with header, failed ops table
        +-- Output: summary.md
+       |
+       v
+  ======= STEP 4: VISUALIZE ========
+  generate_visualization(modules_json)
+       |
+       +-- Read updated unique_modules.json
+       +-- Read summary.md, convert markdown to HTML server-side
+       +-- Collect all module files (IR, logs, reports, parsed traces, failed op MLIR)
+       +-- Build nested tree structure with file data
+       +-- Generate self-contained HTML with embedded CSS/JS and rendered summary
+       +-- Output: analysis_report.html
 ```
 
 ---
@@ -386,9 +400,9 @@ User invocation:
 | `module_runner.py` | 91 | torch.compile + forward pass for IR generation |
 | `shapes.py` | 72 | ShapeCapture class (forward hooks) |
 | `shape_capture_subprocess.py` | 59 | Subprocess: shape capture on TT device |
-| `log_parser.py` | 166 | Parse op-by-op execution logs for per-op error traces |
-| `visualizer.py` | 635 | Step 3: Interactive HTML report with failed ops IR viewer |
-| `summary.py` | 349 | Step 4: Op-centric markdown summary with TTIR attribute extraction |
+| `log_parser.py` | 176 | Parse op-by-op execution logs for per-op error traces |
+| `summary.py` | 367 | Step 3: Op-centric markdown summary with TTIR attribute extraction |
+| `visualizer.py` | 783 | Step 4: Interactive HTML report with summary view and failed ops IR viewer |
 | `data_types.py` | 69 | ModuleInfo dataclass, shared constants |
 | `utils.py` | 155 | Shared utilities (function loading, device setup, path helpers) |
 

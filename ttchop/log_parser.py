@@ -21,6 +21,9 @@ def parse_op_by_op_log(log_path: Path) -> List[Dict[str, Any]]:
     """Parse op-by-op.log into per-op execution blocks.
 
     Each block corresponds to one op test (1:1 with report JSON by index).
+    Blocks are delimited by "evaluating binary=" (start) and "PASS/ERROR: test case="
+    (end) markers, which are printed once per op by the ttrt runner.
+
     Returns list of dicts with keys:
       - success: bool
       - last_ttnn_op: str or None (last "Executing operation" before crash)
@@ -34,21 +37,15 @@ def parse_op_by_op_log(log_path: Path) -> List[Dict[str, Any]]:
     current_block: Optional[Dict[str, Any]] = None
     sub_depth = 0
     collecting_error = False
+    in_execution = False
 
     for line in lines:
         stripped = line.strip()
 
-        # Detect "Starting execution of program: main" (top-level only)
-        if "Starting execution of program: main" in stripped:
-            if "main_" in stripped:
-                # Sub-program (e.g., main_const_eval_0) - track depth
-                sub_depth += 1
-                continue
-            # New top-level block - finalize previous
-            collecting_error = False
+        # New block starts on "evaluating binary="
+        if "evaluating binary=" in stripped:
+            # Finalize previous block if it wasn't closed by PASS/ERROR
             if current_block is not None:
-                if not current_block.pop("_finished"):
-                    current_block["success"] = False
                 _finalize_error_trace(current_block)
                 blocks.append(current_block)
             current_block = {
@@ -56,12 +53,32 @@ def parse_op_by_op_log(log_path: Path) -> List[Dict[str, Any]]:
                 "last_ttnn_op": None,
                 "error_message": None,
                 "_error_lines": [],
-                "_finished": False,
             }
             sub_depth = 0
+            collecting_error = False
+            in_execution = False
             continue
 
         if current_block is None:
+            continue
+
+        # Block ends on PASS/ERROR test case
+        if "PASS: test case=" in stripped or "ERROR: test case=" in stripped:
+            if "ERROR: test case=" in stripped:
+                current_block["success"] = False
+            _finalize_error_trace(current_block)
+            blocks.append(current_block)
+            current_block = None
+            collecting_error = False
+            in_execution = False
+            continue
+
+        # Track "Starting execution of program: main" (top-level only)
+        if "Starting execution of program: main" in stripped:
+            if "main_" in stripped:
+                sub_depth += 1
+                continue
+            in_execution = True
             continue
 
         # Track sub-program exits
@@ -73,14 +90,9 @@ def parse_op_by_op_log(log_path: Path) -> List[Dict[str, Any]]:
         if sub_depth > 0:
             continue
 
-        # Detect top-level "Finished execution"
+        # Track top-level "Finished execution"
         if "Finished execution of program: main" in stripped and "main_" not in stripped:
-            current_block["_finished"] = True
-            collecting_error = False
-            continue
-
-        # Once finished, ignore remaining lines until next block starts
-        if current_block["_finished"]:
+            in_execution = False
             continue
 
         # If we're collecting error trace lines, keep appending until backtrace ends
@@ -91,8 +103,8 @@ def parse_op_by_op_log(log_path: Path) -> List[Dict[str, Any]]:
                 collecting_error = False
             continue
 
-        # Track executing operations (only at top level)
-        if "Executing operation:" in stripped:
+        # Track executing operations (only during runtime execution at top level)
+        if in_execution and "Executing operation:" in stripped:
             current_block["last_ttnn_op"] = _extract_op_name(stripped)
             continue
 
@@ -109,10 +121,8 @@ def parse_op_by_op_log(log_path: Path) -> List[Dict[str, Any]]:
             collecting_error = True
             continue
 
-    # Finalize last block
+    # Finalize last block if never closed by PASS/ERROR
     if current_block is not None:
-        if not current_block.pop("_finished") and current_block["success"]:
-            current_block["success"] = False
         _finalize_error_trace(current_block)
         blocks.append(current_block)
 

@@ -5,6 +5,7 @@
 """Interactive HTML visualization for model analysis results."""
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -66,10 +67,17 @@ def _collect_module_files(module_dir: Path, module_id: str) -> Dict[str, Any]:
         for mlir_file in sorted(irs_dir.glob("*.mlir")):
             name = mlir_file.stem
             ir_type = _classify_ir_file(name)
-            files["ir_files"][ir_type] = {
-                "name": mlir_file.name,
-                "content": _read_file_safe(mlir_file),
-            }
+            content = _read_file_safe(mlir_file)
+            if ir_type in files["ir_files"]:
+                # Concatenate: append with separator showing filename
+                existing = files["ir_files"][ir_type]
+                existing["content"] += f"\n\n// ===== {mlir_file.name} =====\n\n" + content
+                existing["name"] += f", {mlir_file.name}"
+            else:
+                files["ir_files"][ir_type] = {
+                    "name": mlir_file.name,
+                    "content": content,
+                }
 
     failed_ops_dir = module_dir / "failed_ops"
     if failed_ops_dir.exists():
@@ -100,6 +108,111 @@ def _classify_ir_file(stem: str) -> str:
     return stem
 
 
+def _markdown_to_html(md: str) -> str:
+    """Convert summary markdown to HTML. Handles headers, tables, bold, code, paragraphs."""
+    html_parts = []
+    lines = md.split("\n")
+    in_table = False
+    in_thead = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Table rows (contain raw HTML divs, pass through directly)
+        if stripped.startswith("|"):
+            # Skip separator rows like |---|-----|---| but not data rows containing ---
+            if all(c in "-| " for c in stripped):
+                continue
+            # Split on | delimiters, respecting HTML tags
+            cells = _split_table_cells(stripped)
+            if not cells:
+                continue
+            # Replace inline-styled divs from summary.md with class-based divs
+            cells = [_replace_inline_div(c) for c in cells]
+            if not in_table:
+                html_parts.append("<table>")
+                in_table = True
+                # First row is header
+                html_parts.append("<thead><tr>")
+                html_parts.append("".join(f"<th>{c}</th>" for c in cells))
+                html_parts.append("</tr></thead><tbody>")
+                in_thead = True
+                continue
+            html_parts.append("<tr>")
+            html_parts.append("".join(f"<td>{c}</td>" for c in cells))
+            html_parts.append("</tr>")
+            continue
+
+        if in_table:
+            html_parts.append("</tbody></table>")
+            in_table = False
+
+        # Headers
+        if stripped.startswith("# "):
+            html_parts.append(f"<h1>{_inline_md(stripped[2:])}</h1>")
+        elif stripped.startswith("## "):
+            html_parts.append(f"<h2>{_inline_md(stripped[3:])}</h2>")
+        elif stripped.startswith("### "):
+            html_parts.append(f"<h3>{_inline_md(stripped[4:])}</h3>")
+        elif not stripped:
+            continue
+        else:
+            html_parts.append(f"<p>{_inline_md(stripped)}</p>")
+
+    if in_table:
+        html_parts.append("</tbody></table>")
+
+    return "\n".join(html_parts)
+
+
+def _split_table_cells(line: str) -> list:
+    """Split a markdown table row on | delimiters, respecting HTML tag depth."""
+    cells = []
+    current = []
+    depth = 0
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth -= 1
+        elif ch == "\\" and i + 1 < len(s) and s[i + 1] == "|":
+            current.append("|")
+            i += 2
+            continue
+        if ch == "|" and depth <= 0:
+            cells.append("".join(current).strip())
+            current = []
+            i += 1
+            continue
+        current.append(ch)
+        i += 1
+
+    remainder = "".join(current).strip()
+    if remainder:
+        cells.append(remainder)
+    return cells
+
+
+def _inline_md(text: str) -> str:
+    """Convert inline markdown (bold, code) to HTML. Passes existing HTML through."""
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    return text
+
+
+def _replace_inline_div(cell: str) -> str:
+    """Replace inline-styled divs from summary.md with class-based divs for HTML rendering."""
+    return re.sub(r'<div style="[^"]*">', '<div class="cell-scroll">', cell)
+
+
 def generate_visualization(modules_json_path: Path, output_path: Optional[Path] = None) -> Path:
     """Generate HTML visualization from unique_modules.json."""
     modules_json_path = Path(modules_json_path)
@@ -108,8 +221,15 @@ def generate_visualization(modules_json_path: Path, output_path: Optional[Path] 
     with open(modules_json_path) as f:
         data = json.load(f)
 
+    # Read summary.md if it exists (generated before visualization)
+    summary_html = ""
+    summary_path = modules_json_path.parent / "summary.md"
+    if summary_path.exists():
+        summary_md = _read_file_safe(summary_path) or ""
+        summary_html = _markdown_to_html(summary_md)
+
     tree = _build_tree(data, modules_json_path.parent)
-    html = _generate_html(data, tree)
+    html = _generate_html(data, tree, summary_html)
     output_path.write_text(html)
     print(f"Generated visualization: {output_path}")
     return output_path
@@ -154,7 +274,7 @@ def _build_tree(data: Dict, output_dir: Path) -> Dict[str, Any]:
     return root or {"id": "empty", "class_name": "Empty", "children": []}
 
 
-def _generate_html(data: Dict, tree: Dict) -> str:
+def _generate_html(data: Dict, tree: Dict, summary_html: str = "") -> str:
     """Generate self-contained HTML."""
     meta = data.get("metadata", {})
     model_class = meta.get("model_class", "Unknown")
@@ -171,6 +291,8 @@ def _generate_html(data: Dict, tree: Dict) -> str:
     except Exception:
         run_date = ts[:16] if len(ts) > 16 else (ts or "Unknown")
 
+    summary_btn = '<button class="summary-btn" onclick="openSummary()">Summary</button>' if summary_html else ""
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -182,7 +304,10 @@ def _generate_html(data: Dict, tree: Dict) -> str:
 <div class="container">
   <div class="header">
     <h1>Model Analysis: {model_class}</h1>
-    <button class="theme-toggle" onclick="toggleTheme()"><span class="theme-icon" id="theme-icon">&#9788;</span><span id="theme-label">Light</span></button>
+    <div class="header-buttons">
+      {summary_btn}
+      <button class="theme-toggle" onclick="toggleTheme()"><span class="theme-icon" id="theme-icon">&#9788;</span><span id="theme-label">Light</span></button>
+    </div>
     <div class="meta-info">
       <span><strong>Host:</strong> {meta.get("hostname", "unknown")}</span>
       <span><strong>Arch:</strong> {meta.get("device_arch", "unknown")}</span>
@@ -236,6 +361,7 @@ const treeData = {json.dumps(tree)};
 const statusDisplay = {json.dumps(STATUS_DISPLAY)};
 const irOrder = {json.dumps(IR_FILE_ORDER)};
 const irLabels = {json.dumps(IR_FILE_LABELS)};
+const summaryHtml = {json.dumps(summary_html)};
 {_get_javascript()}
 </script>
 </body>
@@ -280,9 +406,28 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 .meta-info,.stats{{display:flex;gap:20px;flex-wrap:wrap;font-size:13px;margin-top:8px;opacity:0.9}}
 .meta-info span,.stats span{{display:flex;align-items:center;gap:6px}}
 .dot{{width:10px;height:10px;border-radius:50%}}
-.theme-toggle{{position:absolute;top:16px;right:16px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);color:white;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;transition:background .15s;display:flex;align-items:center;gap:6px}}
+.header-buttons{{position:absolute;top:16px;right:16px;display:flex;gap:8px;align-items:center}}
+.summary-btn{{background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.3);color:white;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:background .15s}}
+.summary-btn:hover{{background:rgba(255,255,255,.3)}}
+.theme-toggle{{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);color:white;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;transition:background .15s;display:flex;align-items:center;gap:6px}}
 .theme-toggle:hover{{background:rgba(255,255,255,.25)}}
 .theme-icon{{font-size:16px}}
+.summary-view{{padding:32px 40px;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.6;overflow-y:auto;height:100%}}
+.summary-view h1{{font-size:24px;margin-bottom:6px;color:#e2e8f0;font-weight:700;letter-spacing:-0.3px}}
+.summary-view h2{{font-size:14px;margin:24px 0 14px;color:#a78bfa;border-bottom:1px solid #334155;padding-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600}}
+.summary-view p{{margin:8px 0;color:#94a3b8;font-size:13px}}
+.summary-view strong{{color:#e2e8f0}}
+.summary-view code{{background:#1e293b;padding:2px 7px;border-radius:4px;font-size:12px;font-family:Monaco,Menlo,monospace;color:#818cf8;border:1px solid #334155}}
+.summary-view table{{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;margin:16px 0;border-radius:8px;overflow:hidden;border:1px solid #334155}}
+.summary-view th{{text-align:left;padding:10px 12px;background:#0f172a;color:#94a3b8;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;position:sticky;top:0;border-bottom:2px solid #818cf8}}
+.summary-view td{{padding:10px 12px;border-bottom:1px solid #1e293b;vertical-align:top;background:#0f172a}}
+.summary-view tbody tr:nth-child(even) td{{background:#0b1222}}
+.summary-view tr:hover td{{background:#162032}}
+.summary-view .cell-scroll{{max-height:10em;max-width:500px;overflow:auto;white-space:pre;font-size:11px;font-family:Monaco,Menlo,monospace;color:#cbd5e1;background:#0c1425;border:1px solid #1e293b;border-radius:6px;padding:8px 10px;line-height:1.5}}
+.summary-view .cell-scroll::-webkit-scrollbar{{width:6px;height:6px}}
+.summary-view .cell-scroll::-webkit-scrollbar-track{{background:#0c1425;border-radius:3px}}
+.summary-view .cell-scroll::-webkit-scrollbar-thumb{{background:#334155;border-radius:3px}}
+.summary-view .cell-scroll::-webkit-scrollbar-thumb:hover{{background:#475569}}
 .main{{display:flex;gap:20px}}
 .tree{{flex:1;background:var(--bg-panel);border-radius:12px;padding:20px;min-height:500px;overflow:auto;border:1px solid var(--border);transition:background .2s,border-color .2s}}
 .details{{width:400px;background:var(--bg-panel);border-radius:12px;padding:20px;position:sticky;top:20px;max-height:calc(100vh - 40px);overflow-y:auto;border:1px solid var(--border);transition:background .2s,border-color .2s}}
@@ -347,7 +492,6 @@ body.light .err-highlight-l1{{background:rgba(239,68,68,.12)}}
 .line-nums span{{display:block;padding:0 12px 0 16px}}
 .code-text{{padding:16px;color:#e2e8f0;white-space:pre;flex:1;overflow-x:auto}}
 .code-text .code-line{{display:inline}}
-.line-highlight{{background:rgba(129,140,248,.2) !important}}
 
 .report-view{{padding:20px;color:#e2e8f0}}
 .report-view h4{{font-size:14px;margin-bottom:12px;color:#818cf8}}
@@ -524,20 +668,18 @@ function renderViewerContent(n,tab){
   }else if(tab.startsWith('ir_')){
     const key=tab.slice(3);
     const ir=(f.ir_files||{})[key];
-    body.innerHTML=ir?renderCode(ir.content||'Empty file',key==='ttir'):renderCode('File not found');
+    body.innerHTML=ir?renderCode(ir.content||'Empty file'):renderCode('File not found');
   }else{
     body.innerHTML='<div style="padding:20px;color:#94a3b8">Unknown tab</div>';
   }
 }
 
-function renderCode(text,isTtir){
+function renderCode(text){
   const lines=text.split('\\n');
   let nums='',codeLines='';
   lines.forEach((l,i)=>{
-    const ln=i+1;
-    const id=isTtir?' id="ttir-ln-'+ln+'"':'';
-    nums+='<span'+id+'>'+(ln)+'</span>';
-    codeLines+='<span class="code-line"'+(isTtir?' data-ln="'+ln+'"':'')+'>'+esc(l)+'</span>\\n';
+    nums+='<span>'+(i+1)+'</span>';
+    codeLines+='<span class="code-line">'+esc(l)+'</span>\\n';
   });
   return '<div class="code-view"><div class="line-nums">'+nums+'</div><div class="code-text">'+codeLines+'</div></div>';
 }
@@ -572,6 +714,20 @@ function renderReport(raw, parsedRaw){
 
   window._reportErrTexts=[];
 
+  // Align report ops with parsed blocks by success/failure status.
+  // Some ops fail before runtime execution, producing no parsed block.
+  const aligned=[];
+  let pi=0;
+  for(let ri=0;ri<ops.length;ri++){
+    const rOk=ops[ri].success==='True';
+    if(pi<parsed.length){
+      const pOk=parsed[pi].success;
+      if(rOk===pOk){aligned.push(pi);pi++}
+      else if(!rOk&&pOk){aligned.push(-1)} // report fail with no parsed block
+      else{aligned.push(pi);pi++}
+    }else{aligned.push(-1)}
+  }
+
   let h='<div class="report-view">';
   h+='<div class="report-summary">';
   h+='<div class="report-stat total"><div class="num">'+ops.length+'</div><div class="lbl2">Total Ops</div></div>';
@@ -583,24 +739,21 @@ function renderReport(raw, parsedRaw){
   h+='<table class="ops-table"><thead><tr><th>Status</th><th>Op Name</th><th>Inputs</th><th>Outputs</th><th>Details</th>';
   h+='</tr></thead><tbody>';
 
-  // Check if TTIR tab is available for linking
-  const hasTtir=viewerNode&&viewerNode.files&&viewerNode.files.ir_files&&viewerNode.files.ir_files.ttir;
-
-  // Keep original indices before sorting so we can look up parsed blocks
+  // Keep original indices before sorting so we can look up aligned parsed blocks
   const indexed=ops.map((o,i)=>({...o,_idx:i}));
   indexed.sort((a,b)=>(a.success==='True'?1:0)-(b.success==='True'?1:0));
   indexed.forEach(o=>{
     const ok=o.success==='True';
-    const detail=hasParsed?(parsed[o._idx]||{}):{};
-    const clickAttr=hasTtir?' style="cursor:pointer" onclick="jumpToTtirOp(\\''+esc(o.op_name||'')+'\\','+o._idx+')"':'';
-    h+='<tr'+clickAttr+'><td class="'+(ok?'op-pass':'op-fail')+'">'+(ok?'PASS':'FAIL')+'</td>';
+    const pIdx=aligned[o._idx];
+    const detail=(hasParsed&&pIdx>=0)?(parsed[pIdx]||{}):{};
+    h+='<tr><td class="'+(ok?'op-pass':'op-fail')+'">'+(ok?'PASS':'FAIL')+'</td>';
     h+='<td><strong>'+esc(o.op_name||'?')+'</strong></td>';
     h+='<td style="font-size:11px;color:#94a3b8">'+esc(formatTensors(o.inputs))+'</td>';
     h+='<td style="font-size:11px;color:#94a3b8">'+esc(formatTensors(o.outputs))+'</td>';
     h+='<td>';
     if(detail.error_trace||o.error_message){
       const traceIdx=window._reportErrTexts.length;
-      window._reportErrTexts.push(detail.error_trace||o.error_message||'');
+      window._reportErrTexts.push(detail.error_trace||o.error_message&&o.error_message!=='None'||'');
       h+=renderTraceCell(detail.error_trace,o.error_message,o.op_name||'?',traceIdx);
     }else if(detail.last_ttnn_op){
       h+='<div class="detail-op">Last op: '+esc(detail.last_ttnn_op)+'</div>';
@@ -696,35 +849,6 @@ function openErrModal(opName,idx,source){
 
 function closeErrModal(){document.getElementById('err-modal').style.display='none'}
 
-function jumpToTtirOp(opName,opIdx){
-  // Switch to TTIR tab
-  switchTab('ir_ttir');
-  // Wait for render, then find the Nth occurrence of the op in the code
-  setTimeout(()=>{
-    const codeEl=document.querySelector('.code-text');
-    if(!codeEl)return;
-    const codeLines=codeEl.querySelectorAll('.code-line');
-    // Find the opIdx-th ttir op line (matching sequential op order)
-    let found=0;
-    for(let i=0;i<codeLines.length;i++){
-      const txt=codeLines[i].textContent;
-      if(txt.match(/"ttir\\./)){
-        if(found===opIdx){
-          // Remove previous highlights
-          document.querySelectorAll('.line-highlight').forEach(el=>el.classList.remove('line-highlight'));
-          codeLines[i].classList.add('line-highlight');
-          // Also highlight the line number
-          const lnEl=document.getElementById('ttir-ln-'+(i+1));
-          if(lnEl)lnEl.classList.add('line-highlight');
-          codeLines[i].scrollIntoView({behavior:'smooth',block:'center'});
-          return;
-        }
-        found++;
-      }
-    }
-  },50);
-}
-
 let foNode=null,foTab=null;
 function openFoViewer(n){
   foNode=n;
@@ -754,6 +878,15 @@ function renderFoContent(n,tab){
   const key=tab.slice(3);
   const fo=((n.files&&n.files.failed_ops)||{})[key];
   body.innerHTML=fo?renderCode(fo.content||'Empty file'):renderCode('File not found');
+}
+
+function openSummary(){
+  if(!summaryHtml)return;
+  document.getElementById('viewer').style.display='flex';
+  document.getElementById('viewer-title').textContent='Summary';
+  document.getElementById('viewer-tabs').innerHTML='<div class="vtab active">Summary</div>';
+  document.getElementById('viewer-body').innerHTML='<div class="summary-view">'+summaryHtml+'</div>';
+  viewerNode=null;viewerTab=null;
 }
 
 function r(l,v,m=0){return '<div class="row"><div class="lbl">'+esc(l)+'</div><div class="val'+(m?' mono':'')+'">'+v+'</div></div>'}

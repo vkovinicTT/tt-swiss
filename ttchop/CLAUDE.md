@@ -96,4 +96,11 @@ python -m ttchop.ir_export_single_module \
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
 | #685 | 11:33 AM | 🔵 | Failed ops folder feature saves MLIR modules for debugging individual op failures | ~564 |
+
+### Feb 12, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #908 | 1:21 PM | 🔵 | TTChop IR Export Single Module Script Architecture | ~465 |
+| #770 | 9:20 AM | 🔴 | Removed incorrect TTIR-specific highlighting parameter in visualizer | ~328 |
 </claude-mem-context>

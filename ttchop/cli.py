@@ -79,21 +79,21 @@ def main():
     if counts:
         print("Results: " + ", ".join(f"{s}: {c}" for s, c in sorted(counts.items())))
 
-    # Step 3: Visualization
-    print(f"\n{'='*60}\nStep 3: Generating HTML visualization\n{'='*60}")
-    try:
-        from .visualizer import generate_visualization
-        report = generate_visualization(modules_json)
-        print(f"\nOutputs: {modules_json}, {output_dir / 'module_irs'}, {report}")
-    except Exception as e:
-        print(f"Warning: {e}")
-
-    # Step 4: Markdown summary
-    print(f"\n{'='*60}\nStep 4: Generating markdown summary\n{'='*60}")
+    # Step 3: Markdown summary (before visualization so HTML can embed it)
+    print(f"\n{'='*60}\nStep 3: Generating markdown summary\n{'='*60}")
     try:
         from .summary import generate_summary
         summary = generate_summary(modules_json)
         print(f"Summary: {summary}")
+    except Exception as e:
+        print(f"Warning: {e}")
+
+    # Step 4: HTML visualization
+    print(f"\n{'='*60}\nStep 4: Generating HTML visualization\n{'='*60}")
+    try:
+        from .visualizer import generate_visualization
+        report = generate_visualization(modules_json)
+        print(f"\nOutputs: {modules_json}, {output_dir / 'module_irs'}, {report}")
     except Exception as e:
         print(f"Warning: {e}")
 

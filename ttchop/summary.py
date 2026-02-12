@@ -149,27 +149,61 @@ def _load_parsed_blocks(output_dir: Path, module_id: str) -> List[Dict[str, Any]
         return []
 
 
+def _find_matching_parsed_error(
+    op_name: str,
+    failed_parsed: List[Dict[str, Any]],
+    used_indices: set,
+) -> str:
+    """Find the best matching parsed error trace for a failed op.
+
+    Tries exact match first (ttir.X -> ttnn.X in last_ttnn_op),
+    then falls back to the first unused parsed failure.
+    Returns the error_trace string (empty if no match found).
+    """
+    ttnn_name = op_name.replace("ttir.", "ttnn.")
+
+    # Try to match by op name in last_ttnn_op
+    for j, b in enumerate(failed_parsed):
+        if j not in used_indices and ttnn_name in (b.get("last_ttnn_op") or ""):
+            used_indices.add(j)
+            return b.get("error_trace") or ""
+
+    # Fallback: first unused parsed failure
+    for j, b in enumerate(failed_parsed):
+        if j not in used_indices:
+            used_indices.add(j)
+            return b.get("error_trace") or ""
+
+    return ""
+
+
 def _enrich_failed_ops(
     failed_ops: List[Dict[str, Any]],
     parsed_blocks: List[Dict[str, Any]],
     ttir_lookup: Dict[Tuple[str, str], str],
 ) -> List[Dict[str, str]]:
-    """Enrich failed ops with error traces from parsed blocks and params from TTIR."""
+    """Enrich failed ops with error traces from parsed blocks and params from TTIR.
+
+    For each failed op, finds the best matching parsed block by op_name similarity
+    (ttir.X -> ttnn.X in last_ttnn_op) and attaches its full error_trace.
+    Op params are extracted from TTIR MLIR files by matching on op name and input shapes.
+    """
     failed_parsed = [b for b in parsed_blocks if not b.get("success")]
+    used_parsed: set = set()
 
     enriched = []
-    for i, op in enumerate(failed_ops):
-        parsed = failed_parsed[i] if i < len(failed_parsed) else {}
+    for op in failed_ops:
         op_name = op.get("op_name", "Unknown")
         inputs = op.get("inputs", "")
+        error_trace = _find_matching_parsed_error(op_name, failed_parsed, used_parsed)
 
         enriched.append({
             "op_name": op_name,
             "inputs": inputs,
             "outputs": op.get("outputs", ""),
             "op_params": _match_ttir_attrs(op_name, inputs, ttir_lookup) or op.get("op_params", ""),
-            "error": parsed.get("error_message") or op.get("error_message", "Unknown error"),
-            "error_trace": parsed.get("error_trace") or "",
+            "error": op.get("error_message", "Unknown error"),
+            "error_trace": error_trace,
         })
     return enriched
 
@@ -288,7 +322,9 @@ def _build_markdown(
     for i, op in enumerate(unique_ops, 1):
         inputs = _tensordesc_compact(op.get("inputs", ""))
         outputs = _tensordesc_compact(op.get("outputs", ""))
-        error = op["error"].replace("|", "\\|").replace("\n", " ")
+        # Use full error_trace when available, fall back to short error
+        error_text = op.get("error_trace") or op["error"]
+        error_text = error_text.replace("|", "\\|").replace("\n", "<br>")
         params = op.get("op_params", "")
         module = op.get("module", "")
         # Wrap params and error in scrollable divs for table readability
@@ -296,44 +332,14 @@ def _build_markdown(
             params_cell = f'<div style="min-width:300px;max-height:8em;overflow-y:auto;white-space:pre-wrap;font-size:12px">{params}</div>'
         else:
             params_cell = "-"
-        if error:
-            matched = match_error_pattern(op["error"]) or match_error_pattern(op.get("error_trace", ""))
-            display_error = matched if matched else error
-            error_cell = f'<div style="min-width:300px;max-height:8em;overflow-y:auto;white-space:pre-wrap;font-size:12px">{display_error}</div>'
+        if error_text:
+            error_cell = f'<div style="min-width:300px;max-height:8em;overflow-y:auto;white-space:pre-wrap;font-size:12px">{error_text}</div>'
         else:
             error_cell = "-"
         lines.append(
             f"| {i} | `{op['op_name']}` | `{inputs}` | `{outputs}` "
             f"| {params_cell} | {module} | {error_cell} |"
         )
-    lines.append("")
-
-    # Detailed report with full error traces
-    lines.append("## Detailed Report")
-    lines.append("")
-    for i, op in enumerate(unique_ops, 1):
-        params = op.get("op_params", "")
-        module = op.get("module", "")
-        lines.append(f"### {i}. `{op['op_name']}`")
-        lines.append("")
-        lines.append(f"- **Inputs:** `{_tensordesc_compact(op.get('inputs', ''))}`")
-        lines.append(f"- **Outputs:** `{_tensordesc_compact(op.get('outputs', ''))}`")
-        if params:
-            lines.append(f"- **Params:** `{params}`")
-        if module:
-            lines.append(f"- **Module:** {module}")
-        matched = match_error_pattern(op["error"]) or match_error_pattern(op.get("error_trace", ""))
-        lines.append(f"- **Error:** {matched or op['error']}")
-        lines.append("")
-        if op["error_trace"]:
-            lines.append("<details>")
-            lines.append("<summary>Full error trace</summary>")
-            lines.append("")
-            lines.append("```")
-            lines.append(op["error_trace"])
-            lines.append("```")
-            lines.append("</details>")
-            lines.append("")
 
     return lines
 
