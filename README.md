@@ -7,6 +7,13 @@ This repo is a collection of all of the useful tools for enabling models to work
 
 3. Claude skills and commands - We recommend you copy paste these in your `~/.claude` or `<tt-xla-path>/.claude` for easier debugging of models.
 
+## One click setup
+This installs both ttmem and ttchop CLI tools and python packages
+
+```
+pip install git+https://github.com/vkovinicTT/tt-swiss.git
+```
+
 ### Prerequisites
 
 Before using tt-swiss, you need to configure TT-XLA for memory logging and op by op testing:
