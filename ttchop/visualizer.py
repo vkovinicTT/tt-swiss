@@ -222,6 +222,15 @@ def _generate_html(data: Dict, tree: Dict) -> str:
     <div class="viewer-body" id="fo-viewer-body"></div>
   </div>
 </div>
+<div class="err-modal-overlay" id="err-modal" onclick="closeErrModal()" style="display:none">
+  <div class="err-modal" onclick="event.stopPropagation()">
+    <div class="err-modal-header">
+      <div class="err-modal-title" id="err-modal-title"></div>
+      <button class="err-modal-close" onclick="closeErrModal()">&times;</button>
+    </div>
+    <div class="err-modal-body" id="err-modal-body"></div>
+  </div>
+</div>
 <script>
 const treeData = {json.dumps(tree)};
 const statusDisplay = {json.dumps(STATUS_DISPLAY)};
@@ -293,6 +302,15 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 .fail-op-detail{{display:none;padding:0 12px 10px 28px}}
 .fail-op-detail.open{{display:block}}
 .fail-op-detail .err{{font-size:11px;color:var(--fail-err-text);font-family:monospace;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;background:rgba(0,0,0,.15);padding:8px;border-radius:4px;line-height:1.5}}
+.err-highlight-l1{{background:rgba(239,68,68,.18);border-radius:2px;padding:1px 0}}
+body.light .err-highlight-l1{{background:rgba(239,68,68,.12)}}
+
+.err-modal-overlay{{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.55);z-index:1100;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px)}}
+.err-modal{{width:70vw;max-width:900px;max-height:80vh;background:var(--bg-panel);border-radius:12px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 25px 50px rgba(0,0,0,.35);border:1px solid var(--border)}}
+.err-modal-header{{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid var(--border)}}
+.err-modal-title{{font-size:14px;font-weight:600;color:var(--text-primary)}}
+.err-modal-close{{background:none;border:none;color:var(--text-secondary);font-size:24px;cursor:pointer;padding:0 4px;line-height:1}}.err-modal-close:hover{{color:var(--text-primary)}}
+.err-modal-body{{flex:1;overflow-y:auto;padding:16px 20px;font-size:11px;color:var(--fail-err-text);font-family:Monaco,Menlo,monospace;white-space:pre-wrap;word-break:break-all;line-height:1.6}}
 .node{{margin-left:24px}}.node.root{{margin-left:0}}
 .node-row{{display:flex;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer;transition:background .15s}}
 .node-row:hover{{background:var(--bg-hover)}}.node-row.sel{{background:var(--bg-selected)}}
@@ -344,6 +362,14 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 .op-pass{{color:#22c55e}}.op-fail{{color:#ef4444}}
 .op-err-msg{{font-size:11px;color:#94a3b8;max-width:400px;word-break:break-all}}
 .detail-trace{{color:#fbbf24;font-size:10px;font-family:Monaco,Menlo,monospace;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow-y:auto;background:rgba(0,0,0,.2);padding:6px 8px;border-radius:4px;line-height:1.4}}
+.detail-trace-collapsed{{cursor:pointer;padding:6px 8px;background:rgba(0,0,0,.2);border-radius:4px;display:flex;align-items:center;gap:8px;font-size:10px;font-family:Monaco,Menlo,monospace;color:#fbbf24;transition:background .15s}}
+.detail-trace-collapsed:hover{{background:rgba(0,0,0,.3)}}
+.detail-trace-collapsed .trace-preview{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}}
+.detail-trace-collapsed .trace-expand-icon{{color:#94a3b8;font-size:9px;flex-shrink:0}}
+.detail-trace-expanded{{color:#fbbf24;font-size:10px;font-family:Monaco,Menlo,monospace;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;background:rgba(0,0,0,.2);padding:6px 8px;border-radius:4px;line-height:1.4}}
+.detail-trace-expanded .trace-actions{{display:flex;gap:8px;margin-bottom:6px}}
+.detail-trace-expanded .trace-actions button{{background:rgba(129,140,248,.15);border:1px solid rgba(129,140,248,.3);color:#818cf8;font-size:9px;padding:2px 8px;border-radius:4px;cursor:pointer;font-family:inherit}}
+.detail-trace-expanded .trace-actions button:hover{{background:rgba(129,140,248,.25)}}
 .detail-op{{color:#94a3b8;font-size:10px;font-style:italic}}
 
 @media(max-width:900px){{.main{{flex-direction:column}}.details{{width:100%;position:static}}}}
@@ -354,6 +380,11 @@ def _get_javascript() -> str:
     """Return JavaScript."""
     return """
 let sel=null,viewerNode=null,viewerTab=null;
+window._errTexts=[];
+const ERROR_PATTERNS=[
+  {name:'L1 Circular Buffer Overflow',regex:/Statically allocated circular buffers on core range \\[\\(x=\\d+,y=\\d+\\) - \\(x=\\d+,y=\\d+\\)\\] grow to \\d+ B which is beyond max L1 size of \\d+ B/g,cssClass:'err-highlight-l1'}
+];
+const ERR_LONG_THRESHOLD=500;
 
 function render(n,c,root=false){
   const el=document.createElement('div');el.className='node'+(root?' root':'');el.dataset.path=n.module_path;
@@ -414,19 +445,31 @@ function details(n){
     let parsedBlocks=[];
     try{if(f.op_by_op_parsed)parsedBlocks=JSON.parse(f.op_by_op_parsed)}catch(e){}
     const failedParsed=parsedBlocks.filter(b=>!b.success);
+    window._errTexts=[];
     h+='<div class="failed-ops"><h4>Failed Operations ('+n.failed_ops.length+')</h4>';
     n.failed_ops.forEach((o,i)=>{
       const pd=failedParsed[i]||{};
       const errFull=pd.error_trace||o.error_message||'';
       const errShort=pd.error_message||o.error_message||'';
-      const preview=errShort.length>80?errShort.slice(0,80)+'...':errShort;
+      const opName=o.op_name||'Unknown';
+      const isLong=errFull.length>ERR_LONG_THRESHOLD;
+      window._errTexts[i]=errFull;
+      const preview=esc(getErrorPreview(errShort,errFull));
       h+='<div class="fail-op">';
-      h+='<div class="fail-op-summary" onclick="toggleErr('+i+')">';
-      h+='<span class="chevron" id="err-chev-'+i+'">&#9654;</span>';
-      h+='<span class="op">'+esc(o.op_name||'Unknown')+'</span>';
-      h+='<span class="err-preview">'+esc(preview)+'</span>';
+      if(isLong){
+        h+='<div class="fail-op-summary" onclick="openErrModal(\\''+esc(opName).replace(/'/g,"\\\\'")+'\\',' +i+')" title="Open full error log">';
+        h+='<span class="chevron">&#128269;</span>';
+      }else{
+        h+='<div class="fail-op-summary" onclick="toggleErr('+i+')">';
+        h+='<span class="chevron" id="err-chev-'+i+'">&#9654;</span>';
+      }
+      h+='<span class="op">'+esc(opName)+'</span>';
+      h+='<span class="err-preview">'+preview+'</span>';
       h+='</div>';
-      if(errFull)h+='<div class="fail-op-detail" id="err-detail-'+i+'"><div class="err">'+esc(errFull)+'</div></div>';
+      if(!isLong&&errFull){
+        const res=highlightErrors(esc(errFull));
+        h+='<div class="fail-op-detail" id="err-detail-'+i+'"><div class="err">'+res.html+'</div></div>';
+      }
       h+='</div>';
     });
     h+='</div>';
@@ -527,6 +570,8 @@ function renderReport(raw, parsedRaw){
   const duration=data.duration?data.duration.toFixed(1)+'s':'?';
   const hasParsed=parsed.length>0;
 
+  window._reportErrTexts=[];
+
   let h='<div class="report-view">';
   h+='<div class="report-summary">';
   h+='<div class="report-stat total"><div class="num">'+ops.length+'</div><div class="lbl2">Total Ops</div></div>';
@@ -553,10 +598,10 @@ function renderReport(raw, parsedRaw){
     h+='<td style="font-size:11px;color:#94a3b8">'+esc(formatTensors(o.inputs))+'</td>';
     h+='<td style="font-size:11px;color:#94a3b8">'+esc(formatTensors(o.outputs))+'</td>';
     h+='<td>';
-    if(detail.error_trace){
-      h+='<div class="detail-trace">'+esc(detail.error_trace)+'</div>';
-    }else if(o.error_message){
-      h+='<div class="op-err-msg">'+esc(o.error_message)+'</div>';
+    if(detail.error_trace||o.error_message){
+      const traceIdx=window._reportErrTexts.length;
+      window._reportErrTexts.push(detail.error_trace||o.error_message||'');
+      h+=renderTraceCell(detail.error_trace,o.error_message,o.op_name||'?',traceIdx);
     }else if(detail.last_ttnn_op){
       h+='<div class="detail-op">Last op: '+esc(detail.last_ttnn_op)+'</div>';
     }else{
@@ -574,7 +619,82 @@ function formatTensors(s){
   return s.replace(/TensorDesc\\(/g,'').replace(/\\)/g,'').replace(/,\\s*buffer_type=None/g,'').replace(/,\\s*layout=None/g,'').replace(/,\\s*grid_shape=None/g,'').replace(/data_type=/g,'').replace(/shape=\\[/g,'[');
 }
 
+function renderTraceCell(errTrace,errMsg,opName,globalIdx){
+  const text=errTrace||errMsg||'';
+  if(!text)return '';
+  if(text.length>ERR_LONG_THRESHOLD){
+    const preview=esc(getErrorPreview(errMsg||'',errTrace||''));
+    let h='<div class="detail-trace-collapsed" id="trace-col-'+globalIdx+'" onclick="event.stopPropagation();expandTrace(this,'+globalIdx+')">';
+    h+='<span class="trace-expand-icon">&#9654;</span>';
+    h+='<span class="trace-preview">'+preview+'</span>';
+    h+='</div>';
+    const res=highlightErrors(esc(text));
+    h+='<div class="detail-trace-expanded" id="trace-exp-'+globalIdx+'" style="display:none">';
+    h+='<div class="trace-actions">';
+    h+='<button onclick="event.stopPropagation();collapseTrace('+globalIdx+')">Collapse</button>';
+    h+='<button onclick="event.stopPropagation();openErrModal(\\''+esc(opName).replace(/'/g,"\\\\'")+'\\',' +globalIdx+',\\'report\\')">Full view</button>';
+    h+='</div>';
+    h+=res.html;
+    h+='</div>';
+    return h;
+  }
+  const res=highlightErrors(esc(text));
+  return '<div class="detail-trace">'+res.html+'</div>';
+}
+
+function expandTrace(el,idx){
+  document.getElementById('trace-col-'+idx).style.display='none';
+  const exp=document.getElementById('trace-exp-'+idx);
+  exp.style.display='block';
+  setTimeout(()=>{const a=exp.querySelector('.err-highlight-anchor');if(a)a.scrollIntoView({behavior:'smooth',block:'center'})},50);
+}
+
+function collapseTrace(idx){
+  document.getElementById('trace-exp-'+idx).style.display='none';
+  document.getElementById('trace-col-'+idx).style.display='flex';
+}
+
 function toggleErr(i){const d=document.getElementById('err-detail-'+i),c=document.getElementById('err-chev-'+i);if(d){d.classList.toggle('open');c.classList.toggle('open')}}
+
+function highlightErrors(escapedText){
+  let html=escapedText,hasMatch=false,first=true;
+  ERROR_PATTERNS.forEach(p=>{
+    p.regex.lastIndex=0;
+    html=html.replace(p.regex,m=>{
+      hasMatch=true;
+      const cls=p.cssClass+(first?' err-highlight-anchor':'');
+      first=false;
+      return '<span class="'+cls+'">'+m+'</span>';
+    });
+  });
+  return {html,hasMatch};
+}
+
+function getErrorPreview(errShort,errFull){
+  const text=errFull||errShort;
+  for(const p of ERROR_PATTERNS){
+    p.regex.lastIndex=0;
+    const m=p.regex.exec(text);
+    if(m){
+      const s=m[0];
+      return s.length>100?s.slice(0,100)+'...':s;
+    }
+  }
+  return errShort.length>80?errShort.slice(0,80)+'...':errShort;
+}
+
+function openErrModal(opName,idx,source){
+  const arr=source==='report'?window._reportErrTexts:window._errTexts;
+  const errFull=(arr&&arr[idx])||'';
+  document.getElementById('err-modal-title').textContent='Error: '+opName;
+  const escaped=esc(errFull);
+  const res=highlightErrors(escaped);
+  document.getElementById('err-modal-body').innerHTML=res.html;
+  document.getElementById('err-modal').style.display='flex';
+  setTimeout(()=>{const a=document.querySelector('.err-highlight-anchor');if(a)a.scrollIntoView({behavior:'smooth',block:'center'})},50);
+}
+
+function closeErrModal(){document.getElementById('err-modal').style.display='none'}
 
 function jumpToTtirOp(opName,opIdx){
   // Switch to TTIR tab
@@ -642,7 +762,7 @@ function esc(s){if(s==null)return '';return String(s).replace(/&/g,'&amp;').repl
 document.addEventListener('DOMContentLoaded',()=>{
   const c=document.getElementById('tree');if(treeData)render(treeData,c,true);details(null);
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeFoViewer();closeViewer()}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){const em=document.getElementById('err-modal');if(em&&em.style.display!=='none'){closeErrModal()}else{closeFoViewer();closeViewer()}}});
 
 function toggleTheme(){
   document.body.classList.toggle('light');

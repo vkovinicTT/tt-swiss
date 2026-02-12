@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from .data_types import CONTAINER_TYPES
+from .error_patterns import match_error_pattern
 
 # --- TensorDesc parsing ---
 
@@ -296,7 +297,9 @@ def _build_markdown(
         else:
             params_cell = "-"
         if error:
-            error_cell = f'<div style="min-width:300px;max-height:8em;overflow-y:auto;white-space:pre-wrap;font-size:12px">{error}</div>'
+            matched = match_error_pattern(op["error"]) or match_error_pattern(op.get("error_trace", ""))
+            display_error = matched if matched else error
+            error_cell = f'<div style="min-width:300px;max-height:8em;overflow-y:auto;white-space:pre-wrap;font-size:12px">{display_error}</div>'
         else:
             error_cell = "-"
         lines.append(
@@ -319,7 +322,8 @@ def _build_markdown(
             lines.append(f"- **Params:** `{params}`")
         if module:
             lines.append(f"- **Module:** {module}")
-        lines.append(f"- **Error:** {op['error']}")
+        matched = match_error_pattern(op["error"]) or match_error_pattern(op.get("error_trace", ""))
+        lines.append(f"- **Error:** {matched or op['error']}")
         lines.append("")
         if op["error_trace"]:
             lines.append("<details>")
