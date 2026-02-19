@@ -41,7 +41,7 @@ export TT_RUNTIME_MEMORY_LOG_LEVEL=operation
 #### 3. Initialize TTRT artifacts
 
 ```bash
-ttrt query --save-artifacts
+ttrt query --save-artifacts # --disable-eth-dispatch # add this for blackhole qb
 ```
 
 ## Installation
