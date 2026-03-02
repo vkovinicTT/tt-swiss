@@ -13,7 +13,7 @@ This package provides tools to:
 - Generate LLM-friendly text reports
 """
 
-from .parser import parse_log_file
+from .parser import parse_log_file, validate_log_content
 from .text_formatter import LLMTextFormatter
 
-__all__ = ["parse_log_file", "LLMTextFormatter"]
+__all__ = ["parse_log_file", "validate_log_content", "LLMTextFormatter"]
