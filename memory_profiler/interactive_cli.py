@@ -268,6 +268,7 @@ def process_log_file(log_path: str) -> Optional[Path]:
             console.print(f"[red]Error generating report: {e}[/red]")
             return None
 
+    print('DONE')
     return report_path
 
 
