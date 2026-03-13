@@ -1270,7 +1270,7 @@ class MemoryVisualizer:
         # Build visibility arrays for each button
         buttons = []
         for mem_type in display_types:
-            visibility = [mt == mem_type for mt in trace_mem_type]
+            visibility = [mt == mem_type or mt == "_always_visible" for mt in trace_mem_type]
             buttons.append(
                 {
                     "label": mem_type,
@@ -1282,11 +1282,51 @@ class MemoryVisualizer:
                 }
             )
 
+        # Add vertical dashed lines for training step boundaries
+        shapes = []
+        training_step_boundaries = []
+        if self.mem_metadata and "training_step_boundaries" in self.mem_metadata:
+            training_step_boundaries = self.mem_metadata["training_step_boundaries"]
+            for boundary_idx in training_step_boundaries:
+                shapes.append(
+                    {
+                        "type": "line",
+                        "x0": boundary_idx,
+                        "x1": boundary_idx,
+                        "y0": 0,
+                        "y1": 1,
+                        "yref": "paper",
+                        "line": {
+                            "color": "red",
+                            "width": 1.5,
+                            "dash": "dash",
+                        },
+                    }
+                )
+
+        # Add "Training Step" trace for legend entry (if boundaries exist)
+        if training_step_boundaries:
+            traces.append(
+                {
+                    "x": [None],
+                    "y": [None],
+                    "type": "scatter",
+                    "mode": "lines",
+                    "name": "Training Step",
+                    "line": {"color": "red", "width": 1.5, "dash": "dash"},
+                    "visible": True,
+                    "showlegend": True,
+                    "legendgroup": "training_step",
+                }
+            )
+            trace_mem_type.append("_always_visible")
+
         layout = {
             "height": 450,
             "showlegend": True,
             "paper_bgcolor": "transparent",
             "plot_bgcolor": "transparent",
+            "shapes": shapes,
             "title": {
                 "text": "Memory Usage Across Operation Execution",
                 "font": {"size": 18, "color": "rgb(204, 204, 220)"},
