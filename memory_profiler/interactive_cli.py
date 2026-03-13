@@ -533,6 +533,7 @@ Examples:
 
 def main() -> int:
     """Main entry point for the interactive CLI."""
+    print("hi")
     args = parse_args()
 
     # Handle --llm mode (no rich/InquirerPy needed)
