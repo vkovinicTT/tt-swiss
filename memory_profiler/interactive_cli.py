@@ -240,7 +240,8 @@ def process_log_file(log_path: str) -> Optional[Path]:
     console.print(f"[dim]Output directory: {run_dir}[/dim]")
 
     # Step 1: Parse log file
-    with console.status("[bold cyan]Parsing log file...", spinner="dots") as status:
+    console.print("[bold cyan][1/3][/bold cyan] Parsing log file...")
+    with console.status("[bold cyan]  Parsing...", spinner="dots"):
         try:
             parse_log_file(
                 str(log_file),
@@ -250,23 +251,28 @@ def process_log_file(log_path: str) -> Optional[Path]:
                 str(ir_output),
             )
         except Exception as e:
-            console.print(f"[red]Error parsing log file: {e}[/red]")
+            console.print(f"[red]  Error parsing log file: {e}[/red]")
             return None
+    console.print("[green]  Done.[/green]")
 
     # Step 2: Validate outputs
-    with console.status("[bold cyan]Validating outputs...", spinner="dots") as status:
+    console.print("[bold cyan][2/3][/bold cyan] Validating outputs...")
+    with console.status("[bold cyan]  Validating...", spinner="dots"):
         if not validate_outputs(str(mem_output), str(ops_output)):
-            console.print("[red]Output validation failed[/red]")
+            console.print("[red]  Output validation failed[/red]")
             return None
+    console.print("[green]  Done.[/green]")
 
     # Step 3: Generate visualization
-    with console.status("[bold cyan]Generating HTML report...", spinner="dots") as status:
+    console.print("[bold cyan][3/3][/bold cyan] Generating HTML report...")
+    with console.status("[bold cyan]  Generating...", spinner="dots"):
         try:
             visualizer = MemoryVisualizer(run_dir, script_name=report_name)
             report_path = visualizer.generate_report()
         except Exception as e:
-            console.print(f"[red]Error generating report: {e}[/red]")
+            console.print(f"[red]  Error generating report: {e}[/red]")
             return None
+    console.print("[green]  Done.[/green]")
 
     return report_path
 
@@ -458,8 +464,10 @@ def generate_llm_report(log_path: str, output_file: Optional[Path] = None) -> in
     # Parse log file (suppress output when generating to stdout)
     try:
         if output_file:
-            print(f"Parsing log file: {log_file}", file=sys.stderr)
-            print(f"Output directory: {run_dir}", file=sys.stderr)
+            print(f"[1/3] Parsing log file: {log_file}", file=sys.stderr)
+            print(f"      Output directory: {run_dir}", file=sys.stderr)
+        else:
+            print("[1/3] Parsing log file...", file=sys.stderr)
 
         parse_log_file(
             str(log_file),
@@ -468,24 +476,29 @@ def generate_llm_report(log_path: str, output_file: Optional[Path] = None) -> in
             str(registry_output),
             str(ir_output),
         )
+        print("      Done.", file=sys.stderr)
     except Exception as e:
         print(f"Error parsing log file: {e}", file=sys.stderr)
         return 1
 
     # Validate outputs
+    print("[2/3] Validating outputs...", file=sys.stderr)
     if not validate_outputs(str(mem_output), str(ops_output)):
         print("Error: Output validation failed", file=sys.stderr)
         return 1
+    print("      Done.", file=sys.stderr)
 
     # Generate LLM report
+    print("[3/3] Generating LLM report...", file=sys.stderr)
     try:
         formatter = LLMTextFormatter(run_dir, script_name=report_name)
         report = formatter.generate_report(output_file=output_file)
 
         if output_file:
-            print(f"LLM report written to: {output_file}", file=sys.stderr)
+            print(f"      LLM report written to: {output_file}", file=sys.stderr)
         else:
             print(report)
+        print("      Done.", file=sys.stderr)
 
         return 0
     except FileNotFoundError as e:
