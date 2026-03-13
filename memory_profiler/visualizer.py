@@ -1282,6 +1282,39 @@ class MemoryVisualizer:
                 }
             )
 
+        # Build vertical line markers for "Finished execution of program: main"
+        shapes = []
+        annotations = []
+        marker_indices = []
+        if self.mem_metadata:
+            marker_indices = self.mem_metadata.get(
+                "program_main_finished_indices", []
+            )
+        for label_num, marker_idx in enumerate(marker_indices, start=1):
+            shapes.append(
+                {
+                    "type": "line",
+                    "x0": marker_idx,
+                    "x1": marker_idx,
+                    "y0": 0,
+                    "y1": 1,
+                    "yref": "paper",
+                    "line": {"color": "red", "width": 1.5, "dash": "dash"},
+                }
+            )
+            annotations.append(
+                {
+                    "x": marker_idx,
+                    "y": 1,
+                    "yref": "paper",
+                    "text": str(label_num),
+                    "showarrow": False,
+                    "font": {"color": "red", "size": 11},
+                    "yanchor": "bottom",
+                    "xanchor": "center",
+                }
+            )
+
         layout = {
             "height": 450,
             "showlegend": True,
@@ -1334,6 +1367,8 @@ class MemoryVisualizer:
                 "bordercolor": "rgba(204, 204, 220, 0.20)",
                 "font": {"color": "rgb(204, 204, 220)"},
             },
+            "shapes": shapes,
+            "annotations": annotations,
         }
 
         return {"traces": traces, "layout": layout}
