@@ -75,6 +75,11 @@ class MemoryVisualizer:
             self.mem_metadata = None
             self.mem_data = mem_json
 
+        # Extract program main boundaries (op indices where "Finished execution of program: main" appeared)
+        self.program_main_boundaries = []
+        if self.mem_metadata:
+            self.program_main_boundaries = self.mem_metadata.get("program_main_boundaries", [])
+
         # Detect available memory types - only include types present in ALL operations
         self.available_memory_types = []
         if self.mem_data:
@@ -1282,6 +1287,34 @@ class MemoryVisualizer:
                 }
             )
 
+        # Build vertical line shapes and annotations for "Finished execution of program: main"
+        boundary_shapes = []
+        boundary_annotations = []
+        for label_num, boundary_idx in enumerate(self.program_main_boundaries, start=1):
+            boundary_shapes.append(
+                {
+                    "type": "line",
+                    "x0": boundary_idx,
+                    "x1": boundary_idx,
+                    "y0": 0,
+                    "y1": 1,
+                    "yref": "paper",
+                    "line": {"color": "red", "width": 1.5, "dash": "dash"},
+                }
+            )
+            boundary_annotations.append(
+                {
+                    "x": boundary_idx,
+                    "y": 1,
+                    "yref": "paper",
+                    "text": str(label_num),
+                    "showarrow": False,
+                    "font": {"color": "red", "size": 12},
+                    "yanchor": "bottom",
+                    "xanchor": "center",
+                }
+            )
+
         layout = {
             "height": 450,
             "showlegend": True,
@@ -1305,6 +1338,8 @@ class MemoryVisualizer:
                 "linecolor": "rgba(204, 204, 220, 0.20)",
                 "zerolinecolor": "rgba(204, 204, 220, 0.20)",
             },
+            "shapes": boundary_shapes,
+            "annotations": boundary_annotations,
             "updatemenus": [
                 {
                     "type": "buttons",
