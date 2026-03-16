@@ -26,11 +26,11 @@ from typing import Optional, Tuple
 
 # Handle both package import and direct execution
 try:
-    from .parser import parse_log_file, validate_outputs
+    from .parser import parse_log_file, validate_outputs, validate_log_content
     from .text_formatter import LLMTextFormatter
     from .run_profiled import sanitize_report_name, get_reports_dir
 except ImportError:
-    from parser import parse_log_file, validate_outputs
+    from parser import parse_log_file, validate_outputs, validate_log_content
     from text_formatter import LLMTextFormatter
     from run_profiled import sanitize_report_name, get_reports_dir
 
@@ -439,6 +439,11 @@ def generate_llm_report(log_path: str, output_file: Optional[Path] = None) -> in
         print(f"Error: {error}", file=sys.stderr)
         return 1
 
+    content_error = validate_log_content(log_path)
+    if content_error:
+        print(content_error, file=sys.stderr)
+        return 1
+
     # Sanitize log file name and save to ~/.ttmem/reports/<report_name>/
     report_name = sanitize_report_name(log_file.stem)
     run_dir = get_reports_dir() / report_name
@@ -591,6 +596,12 @@ def main() -> int:
         error = validate_log_path(log_path)
         if error:
             console.print(f"[red]{error}[/red]")
+            return 1
+
+        content_error = validate_log_content(log_path)
+        if content_error:
+            console.print(Panel(content_error, title="[bold yellow]Incomplete Log Data[/bold yellow]",
+                                border_style="yellow", padding=(1, 2)))
             return 1
 
         # Process the log file

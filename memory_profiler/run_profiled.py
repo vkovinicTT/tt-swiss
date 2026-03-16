@@ -233,6 +233,12 @@ Examples:
         output_dir = get_reports_dir() / report_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        from memory_profiler.parser import validate_log_content
+        content_error = validate_log_content(str(log_file))
+        if content_error:
+            print(content_error)
+            sys.exit(1)
+
         print("=" * 70)
         print("Memory Profiler - Analyze Mode")
         print("=" * 70)
@@ -280,6 +286,12 @@ Examples:
             print(f"\nTo visualize later, run:")
             print(f"  tt-memory-profiler --visualize {output_dir}")
             return
+
+        from memory_profiler.parser import validate_log_content
+        content_error = validate_log_content(str(log_file))
+        if content_error:
+            print(content_error)
+            sys.exit(1)
 
         # Default: parse and visualize
         analyze_log(log_file, output_dir, script_name)

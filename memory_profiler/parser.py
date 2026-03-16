@@ -524,3 +524,36 @@ def validate_outputs(mem_file: str, ops_file: str) -> bool:
     except Exception as e:
         print(f"Validation error: {e}", file=sys.stderr)
         return False
+
+
+def validate_log_content(log_path: str) -> Optional[str]:
+    """
+    Fast-scan a log file for required data markers.
+    Returns None if valid, or a diagnostic message string if incomplete.
+    """
+    has_operations = False
+    has_memory_states = False
+
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if not has_operations and "Executing operation:" in line and "RuntimeTTNN" in line:
+                    has_operations = True
+                if not has_memory_states and "Device memory state before operation" in line:
+                    has_memory_states = True
+                if has_operations and has_memory_states:
+                    return None
+    except Exception as e:
+        return f"Error reading log file: {e}"
+
+    return (
+        "Hm, it seems I don't have all the information to make a report. One of the most likely reasons:\n"
+        "1. You didn't build tt-xla in debug mode:\n"
+        "    Solution: Use `cmake --preset debug && cmake --build build` to solve this.\n"
+        "2. You don't have all of the required log levels enabled\n"
+        "    Solution: Set the following environment variables:\n"
+        "        export TTXLA_LOGGER_LEVEL=DEBUG\n"
+        "        export TTMLIR_RUNTIME_LOGGER_LEVEL=DEBUG\n"
+        "        export TT_RUNTIME_MEMORY_LOG_LEVEL=operation\n"
+        "Let's fix this and get the log running \U0001f919"
+    )
