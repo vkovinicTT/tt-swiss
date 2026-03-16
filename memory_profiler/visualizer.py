@@ -1336,6 +1336,36 @@ class MemoryVisualizer:
             },
         }
 
+        # Add vertical dashed red lines for "Finished execution of program: main" boundaries
+        boundaries = []
+        if self.mem_metadata:
+            boundaries = self.mem_metadata.get("program_main_boundaries", [])
+        if boundaries:
+            shapes = []
+            annotations = []
+            for label_num, op_idx in enumerate(boundaries, start=1):
+                shapes.append({
+                    "type": "line",
+                    "x0": op_idx,
+                    "x1": op_idx,
+                    "y0": 0,
+                    "y1": 1,
+                    "yref": "paper",
+                    "line": {"color": "red", "width": 1.5, "dash": "dash"},
+                })
+                annotations.append({
+                    "x": op_idx,
+                    "y": 1,
+                    "yref": "paper",
+                    "text": str(label_num),
+                    "showarrow": False,
+                    "font": {"color": "red", "size": 12},
+                    "yanchor": "bottom",
+                    "xanchor": "center",
+                })
+            layout["shapes"] = shapes
+            layout["annotations"] = annotations
+
         return {"traces": traces, "layout": layout}
 
     def _prepare_fragmentation_data(self) -> Dict:
