@@ -1267,6 +1267,40 @@ class MemoryVisualizer:
             )
             trace_mem_type.append(mem_type)
 
+        # Add vertical lines for "Finished execution of program: main" markers
+        program_main_indices = []
+        if self.mem_metadata:
+            program_main_indices = self.mem_metadata.get(
+                "program_main_finished_indices", []
+            )
+
+        shapes = []
+        annotations = []
+        for label_num, op_idx in enumerate(program_main_indices, start=1):
+            shapes.append(
+                {
+                    "type": "line",
+                    "x0": op_idx,
+                    "x1": op_idx,
+                    "y0": 0,
+                    "y1": 1,
+                    "yref": "paper",
+                    "line": {"color": "red", "width": 1.5, "dash": "dash"},
+                }
+            )
+            annotations.append(
+                {
+                    "x": op_idx,
+                    "y": 1,
+                    "yref": "paper",
+                    "text": str(label_num),
+                    "showarrow": False,
+                    "font": {"color": "red", "size": 11},
+                    "yanchor": "bottom",
+                    "xanchor": "center",
+                }
+            )
+
         # Build visibility arrays for each button
         buttons = []
         for mem_type in display_types:
@@ -1334,6 +1368,8 @@ class MemoryVisualizer:
                 "bordercolor": "rgba(204, 204, 220, 0.20)",
                 "font": {"color": "rgb(204, 204, 220)"},
             },
+            "shapes": shapes,
+            "annotations": annotations,
         }
 
         return {"traces": traces, "layout": layout}
