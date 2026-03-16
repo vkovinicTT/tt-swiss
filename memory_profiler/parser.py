@@ -117,6 +117,9 @@ def parse_log_file(
     # Key: SSA name (e.g., "%0"), Value: layout_info dict
     live_tensors: Dict[str, Dict] = {}
 
+    # Track "Finished execution of program: main" markers
+    program_main_finished_indices: List[int] = []
+
     while i < len(lines):
         line = lines[i]
 
@@ -147,6 +150,9 @@ def parse_log_file(
                 and const_eval_stack[-1] == program_name
             ):
                 const_eval_stack.pop()
+            # Track "Finished execution of program: main" for visualization markers
+            if program_name == "main":
+                program_main_finished_indices.append(op_index - 1 if op_index > 0 else 0)
 
         # Check for operation execution line
         if "Executing operation:" in line and "RuntimeTTNN" in line:
@@ -391,6 +397,7 @@ def parse_log_file(
             "metadata": {
                 "memory_config": memory_config,
                 "total_operations": len(memory_stats),
+                "program_main_finished_indices": program_main_finished_indices,
             },
             "operations": memory_stats,
         }

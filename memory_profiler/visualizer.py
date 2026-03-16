@@ -75,6 +75,13 @@ class MemoryVisualizer:
             self.mem_metadata = None
             self.mem_data = mem_json
 
+        # Extract program execution markers from metadata
+        self.program_main_finished_indices = []
+        if self.mem_metadata:
+            self.program_main_finished_indices = self.mem_metadata.get(
+                "program_main_finished_indices", []
+            )
+
         # Detect available memory types - only include types present in ALL operations
         self.available_memory_types = []
         if self.mem_data:
@@ -1335,6 +1342,37 @@ class MemoryVisualizer:
                 "font": {"color": "rgb(204, 204, 220)"},
             },
         }
+
+        # Add vertical dashed red lines for "Finished execution of program: main"
+        if self.program_main_finished_indices:
+            shapes = []
+            annotations = []
+            for label_num, op_idx in enumerate(self.program_main_finished_indices, start=1):
+                shapes.append(
+                    {
+                        "type": "line",
+                        "x0": op_idx,
+                        "x1": op_idx,
+                        "y0": 0,
+                        "y1": 1,
+                        "yref": "paper",
+                        "line": {"color": "red", "width": 1.5, "dash": "dash"},
+                    }
+                )
+                annotations.append(
+                    {
+                        "x": op_idx,
+                        "y": 1,
+                        "yref": "paper",
+                        "text": str(label_num),
+                        "showarrow": False,
+                        "font": {"color": "red", "size": 12},
+                        "yanchor": "bottom",
+                        "xanchor": "center",
+                    }
+                )
+            layout["shapes"] = shapes
+            layout["annotations"] = annotations
 
         return {"traces": traces, "layout": layout}
 
