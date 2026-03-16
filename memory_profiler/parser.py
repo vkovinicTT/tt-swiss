@@ -113,6 +113,9 @@ def parse_log_file(
     const_eval_cache_misses: set = set()
     const_eval_ops_count: Dict[str, int] = {}
 
+    # Track "Finished execution of program: main" markers
+    program_main_finished: List[int] = []
+
     # Track live tensors by SSA name for unpadded memory analysis
     # Key: SSA name (e.g., "%0"), Value: layout_info dict
     live_tensors: Dict[str, Dict] = {}
@@ -147,6 +150,9 @@ def parse_log_file(
                 and const_eval_stack[-1] == program_name
             ):
                 const_eval_stack.pop()
+            # Track "Finished execution of program: main" markers
+            if program_name == "main" and op_index > 0:
+                program_main_finished.append(op_index - 1)
 
         # Check for operation execution line
         if "Executing operation:" in line and "RuntimeTTNN" in line:
@@ -391,6 +397,7 @@ def parse_log_file(
             "metadata": {
                 "memory_config": memory_config,
                 "total_operations": len(memory_stats),
+                "program_main_finished": program_main_finished,
             },
             "operations": memory_stats,
         }
