@@ -1282,6 +1282,34 @@ class MemoryVisualizer:
                 }
             )
 
+        # Build vertical line shapes and annotations for "Finished execution of program: main"
+        program_main_markers = []
+        if self.mem_metadata:
+            program_main_markers = self.mem_metadata.get("program_main_finished", [])
+
+        shapes = []
+        annotations = []
+        for label_num, op_idx in enumerate(program_main_markers, start=1):
+            shapes.append({
+                "type": "line",
+                "x0": op_idx,
+                "x1": op_idx,
+                "y0": 0,
+                "y1": 1,
+                "yref": "paper",
+                "line": {"color": "red", "width": 1.5, "dash": "dash"},
+            })
+            annotations.append({
+                "x": op_idx,
+                "y": 1,
+                "yref": "paper",
+                "text": str(label_num),
+                "showarrow": False,
+                "font": {"color": "red", "size": 12, "family": "Inter, sans-serif"},
+                "yanchor": "bottom",
+                "xanchor": "center",
+            })
+
         layout = {
             "height": 450,
             "showlegend": True,
@@ -1305,6 +1333,8 @@ class MemoryVisualizer:
                 "linecolor": "rgba(204, 204, 220, 0.20)",
                 "zerolinecolor": "rgba(204, 204, 220, 0.20)",
             },
+            "shapes": shapes,
+            "annotations": annotations,
             "updatemenus": [
                 {
                     "type": "buttons",
