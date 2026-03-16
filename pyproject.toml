@@ -32,6 +32,7 @@ classifiers = [
 tt-memory-profiler = "memory_profiler.run_profiled:main"
 ttmem = "memory_profiler.interactive_cli:main"
 ttchop = "ttchop.cli:main"
+ttmem-web = "memory_profiler.web_server:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
