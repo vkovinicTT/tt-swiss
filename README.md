@@ -114,6 +114,18 @@ Output is stored in `./logs/` relative to your current working directory (or `--
 - Right-click on the HTML file and choose "Open with Live Server"
 - Requires the Live Server extension in VS Code
 
+#### Docker Users
+
+If you are running inside a Docker container, the HTTP server binds to `0.0.0.0` but the port is not exposed by default. You need to forward port `8000` when starting your container:
+
+```bash
+docker run -p 8000:8000 <your-image>
+```
+
+Or if the container is already running, you can use `docker exec` with a new container that shares the network, or restart with the port published. If `ttmem` picks a different port (e.g. `8001` if `8000` is busy), forward that port instead.
+
+Once the port is forwarded, open `http://localhost:8000/report.html` in your host browser to view the report.
+
 ### Features
 
 - Interactive HTML visualization with memory graphs, fragmentation analysis, peak operations
