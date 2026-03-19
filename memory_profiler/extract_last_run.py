@@ -16,7 +16,10 @@ Example:
     python extract_last_run.py logs/decoder_20260122_153451/decoder_profile.log
 """
 
+import os
 import sys
+import tempfile
+import shutil
 from pathlib import Path
 
 
@@ -24,6 +27,8 @@ def extract_last_run(log_file_path: Path) -> None:
     """
     Extract the last run from a log file by finding the first occurrence
     of "Got output shape:" and keeping everything after it.
+
+    Uses streaming I/O to avoid loading the entire file into memory.
     """
     if not log_file_path.exists():
         print(f"Error: Log file not found: {log_file_path}")
@@ -31,43 +36,51 @@ def extract_last_run(log_file_path: Path) -> None:
 
     print(f"Processing: {log_file_path}")
 
-    # Read the entire log file
-    with open(log_file_path, "r") as f:
-        lines = f.readlines()
-
-    print(f"Total lines in log: {len(lines)}")
-
-    # Find all occurrences of "Got output shape:"
     marker = "Got output shape:"
-    marker_indices = []
+    marker_found = False
+    marker_line = 0
+    total_lines = 0
+    lines_kept = 0
 
-    for i, line in enumerate(lines):
-        if marker in line:
-            marker_indices.append(i)
-
-    if not marker_indices:
-        print(f"Warning: No '{marker}' found in log file. Keeping entire log.")
-        return
-
-    print(f"Found {len(marker_indices)} occurrence(s) of '{marker}'")
-
-    # Get the first occurrence
-    first_marker_index = marker_indices[0]
-    print(f"First occurrence at line {first_marker_index + 1}")
-
-    # Keep everything after the first marker (excluding the marker line itself)
-    lines_to_keep = lines[first_marker_index + 1 :]
-    print(f"Keeping {len(lines_to_keep)} lines from after first occurrence")
-
-    # Write back to the same file
-    with open(log_file_path, "w") as f:
-        f.writelines(lines_to_keep)
-
-    print(f"\n✓ Successfully extracted content after first '{marker}'")
-    print(
-        f"✓ Removed {len(lines) - len(lines_to_keep)} lines (warmup + first run marker)"
+    # Stream through the file: skip until marker, write the rest to a temp file
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=log_file_path.parent, suffix=".tmp", prefix=".extract_"
     )
-    print(f"✓ Updated: {log_file_path}")
+    try:
+        with open(log_file_path, "r") as fin, open(tmp_fd, "w") as fout:
+            for line_num, line in enumerate(fin, 1):
+                total_lines = line_num
+                if not marker_found:
+                    if marker in line:
+                        marker_found = True
+                        marker_line = line_num
+                        continue  # skip the marker line itself
+                else:
+                    fout.write(line)
+                    lines_kept += 1
+
+        if not marker_found:
+            print(f"Warning: No '{marker}' found in log file. Keeping entire log.")
+            os.unlink(tmp_path)
+            return
+
+        print(f"Total lines in log: {total_lines}")
+        print(f"First occurrence at line {marker_line}")
+        print(f"Keeping {lines_kept} lines from after first occurrence")
+
+        # Atomically replace the original file
+        shutil.move(tmp_path, str(log_file_path))
+
+        print(f"\n✓ Successfully extracted content after first '{marker}'")
+        print(
+            f"✓ Removed {total_lines - lines_kept} lines (warmup + first run marker)"
+        )
+        print(f"✓ Updated: {log_file_path}")
+    except Exception:
+        # Clean up temp file on error
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
 
 
 def main():

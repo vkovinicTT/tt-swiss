@@ -16,6 +16,11 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
+try:
+    from .mem_logger import log_mem
+except ImportError:
+    from mem_logger import log_mem
+
 
 def find_ir_module_boundaries(
     lines: List[str], module_type: str
@@ -145,6 +150,40 @@ def build_loc_line_index(ir_text: str) -> Dict[str, int]:
     return loc_index
 
 
+def _stream_extract_ir_sections(log_path: str) -> Dict[str, List[str]]:
+    """
+    Stream through a log file and extract only the TTIR and TTNN module
+    sections, without loading the entire file into memory.
+
+    Returns:
+        Dict mapping module type ('ttir', 'ttnn') to list of section lines.
+    """
+    sections: Dict[str, List[str]] = {}
+    current_type = None
+    current_lines: List[str] = []
+
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if current_type is None:
+                # Check for section start - only exact ttir: or ttnn: matches
+                for mod_type in ("ttir", "ttnn"):
+                    if f"MLIR Module {mod_type}:" in line:
+                        current_type = mod_type
+                        current_lines = [line]
+                        break
+            else:
+                current_lines.append(line)
+                if "END OF MLIR MODULE" in line:
+                    sections[current_type] = current_lines
+                    current_type = None
+                    current_lines = []
+                    # Stop early if we found both
+                    if "ttir" in sections and "ttnn" in sections:
+                        break
+
+    return sections
+
+
 def parse_ir_modules(log_path: str) -> Dict:
     """
     Parse IR modules from a log file.
@@ -163,9 +202,9 @@ def parse_ir_modules(log_path: str) -> Dict:
         }
         Returns empty dict entries if modules are not found.
     """
+    log_mem("parse_ir_modules: start")
     try:
-        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
+        sections = _stream_extract_ir_sections(log_path)
     except FileNotFoundError:
         print(f"Error: Log file not found: {log_path}", file=sys.stderr)
         return {"ttir": {"text": "", "loc_index": {}}, "ttnn": {"text": "", "loc_index": {}}}
@@ -173,23 +212,25 @@ def parse_ir_modules(log_path: str) -> Dict:
         print(f"Error reading log file: {e}", file=sys.stderr)
         return {"ttir": {"text": "", "loc_index": {}}, "ttnn": {"text": "", "loc_index": {}}}
 
+    log_mem("parse_ir_modules: sections extracted (streaming)")
+
     result = {
         "ttir": {"text": "", "loc_index": {}},
         "ttnn": {"text": "", "loc_index": {}},
     }
 
-    # Find and parse TTIR module
-    ttir_start, ttir_end = find_ir_module_boundaries(lines, "ttir")
-    if ttir_start >= 0:
-        ttir_text = extract_module_text(lines, ttir_start, ttir_end)
+    # Process TTIR section if found
+    if "ttir" in sections:
+        ttir_lines = sections["ttir"]
+        ttir_text = extract_module_text(ttir_lines, 0, len(ttir_lines) - 1)
         result["ttir"]["text"] = ttir_text
         result["ttir"]["loc_index"] = build_loc_line_index(ttir_text)
         print(f"Found TTIR module: {len(ttir_text)} chars, {len(result['ttir']['loc_index'])} locations")
 
-    # Find and parse TTNN module
-    ttnn_start, ttnn_end = find_ir_module_boundaries(lines, "ttnn")
-    if ttnn_start >= 0:
-        ttnn_text = extract_module_text(lines, ttnn_start, ttnn_end)
+    # Process TTNN section if found
+    if "ttnn" in sections:
+        ttnn_lines = sections["ttnn"]
+        ttnn_text = extract_module_text(ttnn_lines, 0, len(ttnn_lines) - 1)
         result["ttnn"]["text"] = ttnn_text
         result["ttnn"]["loc_index"] = build_loc_line_index(ttnn_text)
         print(f"Found TTNN module: {len(ttnn_text)} chars, {len(result['ttnn']['loc_index'])} locations")

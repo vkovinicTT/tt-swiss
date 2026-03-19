@@ -15,6 +15,11 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
+try:
+    from .mem_logger import log_mem
+except ImportError:
+    from mem_logger import log_mem
+
 # Dtype sizes in bytes
 DTYPE_SIZES = {
     "bf16": 2,
@@ -211,6 +216,31 @@ def parse_func_signature(lines: List[str], start_idx: int, end_idx: int) -> str:
     return " ".join(signature_parts)
 
 
+def _stream_extract_section(log_path: str, section_name: str) -> Optional[List[str]]:
+    """
+    Stream through a log file and extract only the lines belonging to an MLIR
+    module section, without loading the entire file into memory.
+
+    Returns:
+        List of lines from section start to end (inclusive), or None if not found.
+    """
+    section_lines = []
+    in_section = False
+
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if not in_section:
+                if f"MLIR Module {section_name}:" in line:
+                    in_section = True
+                    section_lines.append(line)
+            else:
+                section_lines.append(line)
+                if "END OF MLIR MODULE" in line:
+                    return section_lines
+
+    return None if not in_section else section_lines
+
+
 def parse_inputs_registry(log_path: str) -> Dict:
     """
     Parse MLIR module from log to extract function argument registry.
@@ -227,9 +257,17 @@ def parse_inputs_registry(log_path: str) -> Dict:
     Returns:
         Dictionary with 'metadata' and 'entries' keys
     """
+    log_mem("parse_inputs_registry: start")
+
+    # Stream through file, only buffering MLIR module sections we need
+    section_lines = None
+    section_names_to_try = ["shlo_frontend", "shlo_compiler", "shlo"]
+
     try:
-        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
+        for target_section in section_names_to_try:
+            section_lines = _stream_extract_section(log_path, target_section)
+            if section_lines is not None:
+                break
     except FileNotFoundError:
         print(f"Error: Log file not found: {log_path}", file=sys.stderr)
         return {"metadata": {}, "entries": []}
@@ -237,23 +275,16 @@ def parse_inputs_registry(log_path: str) -> Dict:
         print(f"Error reading log file: {e}", file=sys.stderr)
         return {"metadata": {}, "entries": []}
 
-    # Try to find shlo_frontend section first (has ttcore.argument_type markers)
-    start_idx, end_idx = find_mlir_module_section(lines, "shlo_frontend")
+    log_mem("parse_inputs_registry: section extracted (streaming)")
 
-    if start_idx < 0:
-        # Fallback to shlo_compiler section
-        start_idx, end_idx = find_mlir_module_section(lines, "shlo_compiler")
-
-    if start_idx < 0:
-        # Try any MLIR module section
-        start_idx, end_idx = find_mlir_module_section(lines, "shlo")
-
-    if start_idx < 0:
+    if section_lines is None:
         print("Warning: Could not find MLIR module section in log", file=sys.stderr)
         return {"metadata": {}, "entries": []}
 
-    # Extract function signature
-    signature = parse_func_signature(lines, start_idx, end_idx)
+    # Extract function signature from the buffered section only
+    start_idx = 0
+    end_idx = len(section_lines) - 1
+    signature = parse_func_signature(section_lines, start_idx, end_idx)
 
     if not signature:
         print("Warning: Could not find func.func @main signature", file=sys.stderr)

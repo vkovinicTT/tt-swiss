@@ -17,11 +17,15 @@ try:
     from .ir_parser import parse_ir_modules
     from .memory_parser import parse_memory_stats
     from .mlir_parser import parse_mlir_operation
+    from .mem_logger import log_mem
+    from .streaming_reader import BufferedLineReader
 except ImportError:
     from inputs_registry_parser import parse_inputs_registry
     from ir_parser import parse_ir_modules
     from memory_parser import parse_memory_stats
     from mlir_parser import parse_mlir_operation
+    from mem_logger import log_mem
+    from streaming_reader import BufferedLineReader
 
 
 def calculate_unpadded_memory_state(live_tensors: Dict[str, Dict]) -> Dict:
@@ -89,12 +93,12 @@ def parse_log_file(
         registry_output: Optional path for inputs registry JSON output
         ir_output: Optional path for IR modules JSON output (TTIR/TTNN)
     """
+    log_mem("parse_log_file: start")
     operations = []
     memory_stats = []
 
     try:
-        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
+        reader = BufferedLineReader(log_path, buffer_size=10)
     except FileNotFoundError:
         print(f"Error: Log file not found: {log_path}", file=sys.stderr)
         return
@@ -102,7 +106,8 @@ def parse_log_file(
         print(f"Error reading log file: {e}", file=sys.stderr)
         return
 
-    i = 0
+    log_mem("parse_log_file: streaming reader opened")
+
     op_index = 0
     skipped_ops = 0
     deallocate_count = 0
@@ -117,8 +122,9 @@ def parse_log_file(
     # Key: SSA name (e.g., "%0"), Value: layout_info dict
     live_tensors: Dict[str, Dict] = {}
 
-    while i < len(lines):
-        line = lines[i]
+    while reader.has_lines:
+        line = reader.current_line
+        line_num = reader.total_consumed + 1
 
         # Check for const_eval cache miss
         cache_miss_match = re.search(
@@ -154,9 +160,9 @@ def parse_log_file(
 
             if not op_info:
                 print(
-                    f"Warning: Could not parse operation at line {i+1}", file=sys.stderr
+                    f"Warning: Could not parse operation at line {line_num}", file=sys.stderr
                 )
-                i += 1
+                reader.advance()
                 skipped_ops += 1
                 continue
 
@@ -168,17 +174,18 @@ def parse_log_file(
                     deallocated_ssa = op_info["inputs"][0]
                     if deallocated_ssa in live_tensors:
                         del live_tensors[deallocated_ssa]
-                i += 1
+                reader.advance()
                 continue
 
             # Skip get_device operations (no tensor data)
             if "get_device" in op_info["mlir_op"]:
                 get_device_count += 1
-                i += 1
+                reader.advance()
                 continue
 
-            # Look ahead for memory stats (should be on next line)
-            mem_info = parse_memory_stats(lines, i + 1)
+            # Look ahead for memory stats using the buffer (no full-file load)
+            lookahead = reader.peek_slice(1, 6)
+            mem_info = parse_memory_stats(lookahead, 0)
 
             if mem_info:
                 # Add index and cross-reference fields to both outputs
@@ -228,12 +235,17 @@ def parse_log_file(
                 op_index += 1
             else:
                 print(
-                    f"Warning: No memory stats found for operation '{op_info['mlir_op']}' at line {i+1} (loc: {op_info['loc']})",
+                    f"Warning: No memory stats found for operation '{op_info['mlir_op']}' at line {line_num} (loc: {op_info['loc']})",
                     file=sys.stderr,
                 )
                 skipped_ops += 1
 
-        i += 1
+        reader.advance()
+
+    total_lines = reader.total_consumed
+    reader.close()
+
+    log_mem("parse_log_file: main loop done")
 
     # Parse inputs registry from MLIR module
     registry = None
@@ -372,6 +384,8 @@ def parse_log_file(
             if op_info.get("weights") and not op_info.get("is_weight_op"):
                 op_info["is_weight_op"] = True
 
+    log_mem("parse_log_file: registry + IR done")
+
     # Extract memory configuration from first operation
     memory_config = {}
     if memory_stats:
@@ -435,7 +449,7 @@ def parse_log_file(
     print(f"  Deallocate operations excluded: {deallocate_count}")
     print(f"  Get_device operations excluded: {get_device_count}")
     print(f"  Operations skipped (no memory stats): {skipped_ops}")
-    print(f"  Total log lines processed: {len(lines)}")
+    print(f"  Total log lines processed: {total_lines}")
 
     if const_eval_ops_count:
         print(f"\nConst Eval Summary:")
