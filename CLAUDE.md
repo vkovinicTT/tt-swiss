@@ -63,6 +63,7 @@ The HTML report includes:
 - **Synchronized JSON outputs**: The nth element in `memory.json` corresponds to the nth element in `operations.json`
 - **Import compatibility**: Modules use try/except for relative vs absolute imports to work both as package and standalone scripts
 - **const_eval tracking**: Operations are classified as weight vs activation based on const_eval graph detection
+- **Streaming file I/O**: Parsers use streaming with buffered look-ahead instead of `f.readlines()` to avoid loading entire log files into memory. See "Memory-Efficient Streaming" below
 
 ### Output Structure
 
@@ -75,6 +76,38 @@ The HTML report includes:
 ```
 
 Note: `<report-name>` has underscores replaced with hyphens from the original script name.
+
+## Memory-Efficient Streaming
+
+Log files can be very large (hundreds of MB to GB). All parsers use streaming I/O to keep RAM usage low:
+
+- **streaming_reader.py** - `BufferedLineReader` class: reads a file line-by-line with a sliding look-ahead buffer (default 10 lines). Used by `parser.py` for the main parsing loop where `parse_memory_stats` needs to peek 5 lines ahead.
+- **parser.py** - Main loop uses `BufferedLineReader` instead of `readlines()`. Look-ahead for memory stats is served from `reader.peek_slice(1, 6)`.
+- **inputs_registry_parser.py** - Streams through the file and only buffers the small MLIR module section it needs (a few hundred lines), not the entire file.
+- **ir_parser.py** - Same streaming approach: only buffers the TTIR and TTNN module sections.
+- **extract_last_run.py** - Streams input to a temp file instead of loading + slicing a full lines list. Uses atomic rename for safe replacement.
+
+**Important**: Do not reintroduce `f.readlines()` in any parser that reads log files. Always use streaming or section-buffering patterns.
+
+## Memory Logging / Diagnostics
+
+**mem_logger.py** provides lightweight RSS logging at key pipeline stages. Enable with:
+
+```bash
+TTMEM_LOG_MEMORY=1 ttmem
+```
+
+This prints `[MEM] <label>: RSS = X.X MB` lines to stderr at each checkpoint (file open, after main loop, after registry parsing, etc.). Useful for diagnosing memory spikes when processing large logs.
+
+## Benchmarking
+
+`benchmark_memory.py` (repo root) measures wall time, RSS, and tracemalloc peak for the parsing pipeline:
+
+```bash
+python benchmark_memory.py
+```
+
+It runs the full pipeline, inputs_registry_parser, and ir_parser independently against `~/tt-xla/vae.log` and prints a summary.
 
 ## Prerequisites
 
