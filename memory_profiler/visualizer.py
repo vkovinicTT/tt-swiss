@@ -82,6 +82,11 @@ class MemoryVisualizer:
                 if all(mt in op.get("memory", {}) for op in self.mem_data):
                     self.available_memory_types.append(mt)
 
+        # Cache DRAM bank count for per-bank/total conversions
+        self.num_dram_banks = 1
+        if self.mem_metadata and "memory_config" in self.mem_metadata:
+            self.num_dram_banks = self.mem_metadata["memory_config"].get("DRAM", {}).get("num_banks", 1)
+
     def generate_report(self, output_path: Path = None) -> Path:
         """
         Generate complete HTML visualization report.
@@ -178,7 +183,15 @@ class MemoryVisualizer:
 
         # Prepare data for JavaScript
         memory_graph_data = self._prepare_memory_graph_data()
+        memory_graph_trace_mem_types = memory_graph_data.pop("trace_mem_types", [])
+        memory_graph_display_types = memory_graph_data.pop("display_types", [])
         unpadded_comparison_data = self._prepare_unpadded_comparison_data()
+
+        # Build memory config for JS (mem_type -> num_banks)
+        memory_config_for_js = {}
+        if self.mem_metadata and "memory_config" in self.mem_metadata:
+            for mt, cfg in self.mem_metadata["memory_config"].items():
+                memory_config_for_js[mt] = cfg.get("num_banks", 1)
 
         # Prepare IR location indices for JavaScript
         ir_loc_index = {"ttir": {}, "ttnn": {}}
@@ -738,6 +751,59 @@ class MemoryVisualizer:
             font-size: 12px;
             color: var(--text-secondary);
         }}
+
+        /* Section header with memory display toggle */
+        .section-header {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            border-bottom: 2px solid var(--border-medium);
+            padding-bottom: 8px;
+        }}
+        .section-header h2 {{
+            margin: 0;
+            border: none;
+            padding: 0;
+        }}
+        .mem-display-toggle {{
+            display: inline-flex;
+            border-radius: 6px;
+            overflow: hidden;
+            border: 1px solid var(--border-medium);
+            flex-shrink: 0;
+        }}
+        .mem-display-toggle button {{
+            padding: 4px 14px;
+            font-size: 12px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
+            border: none;
+            cursor: pointer;
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            transition: all 0.15s;
+            min-width: 72px;
+            text-align: center;
+        }}
+        .mem-display-toggle button.active {{
+            background: var(--accent-primary);
+            color: #fff;
+        }}
+        .mem-display-toggle button:not(.active):hover {{
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }}
+        .mem-display-toggle-label {{
+            font-size: 11px;
+            color: var(--text-disabled);
+            margin-right: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 600;
+            align-self: center;
+        }}
     </style>
 </head>
 <body>
@@ -767,7 +833,16 @@ class MemoryVisualizer:
                     </div>
 
                     <!-- Summary Statistics -->
-                    <h2>Summary Statistics</h2>
+                    <div class="section-header">
+                        <h2>Summary Statistics</h2>
+                        <div style="display: flex; align-items: center;">
+                            <span class="mem-display-toggle-label">Memory Display</span>
+                            <div class="mem-display-toggle">
+                                <button class="active" data-mode="per-bank" onclick="toggleMemDisplay('summary', this)">Per-Bank</button>
+                                <button data-mode="total" onclick="toggleMemDisplay('summary', this)">Total</button>
+                            </div>
+                        </div>
+                    </div>
                     <div class="summary-grid">
                         <div class="summary-card">
                             <div class="label">Total Operations</div>
@@ -775,22 +850,31 @@ class MemoryVisualizer:
                         </div>
                         <div class="summary-card green">
                             <div class="label">Peak DRAM Usage</div>
-                            <div class="value">{summary_stats['memory_types']['DRAM']['peak']:.1f} MB</div>
+                            <div class="value"><span data-section="summary" data-per-bank="{summary_stats['memory_types']['DRAM']['peak']}" data-mem-type="DRAM" data-decimals="1">{summary_stats['memory_types']['DRAM']['peak']:.1f}</span> <span data-section="summary" data-unit-label>MB/bank</span></div>
                         </div>
                         <div class="summary-card blue">
                             <div class="label">Peak L1 Usage</div>
-                            <div class="value">{summary_stats['memory_types']['L1']['peak']:.2f} MB</div>
+                            <div class="value"><span data-section="summary" data-per-bank="{summary_stats['memory_types']['L1']['peak']}" data-mem-type="L1" data-decimals="2">{summary_stats['memory_types']['L1']['peak']:.2f}</span> <span data-section="summary" data-unit-label>MB/bank</span></div>
                         </div>
                         <div class="summary-card orange">
                             <div class="label">Avg DRAM Usage</div>
-                            <div class="value">{summary_stats['memory_types']['DRAM']['avg']:.1f} MB</div>
+                            <div class="value"><span data-section="summary" data-per-bank="{summary_stats['memory_types']['DRAM']['avg']}" data-mem-type="DRAM" data-decimals="1">{summary_stats['memory_types']['DRAM']['avg']:.1f}</span> <span data-section="summary" data-unit-label>MB/bank</span></div>
                         </div>
                         {self._format_weight_summary_card()}
                         {self._format_padding_overhead_card(peak_padding_overhead)}
                     </div>
 
                     <!-- Memory Usage Over Time -->
-                    <h2>Memory Usage Over Time</h2>
+                    <div class="section-header">
+                        <h2>Memory Usage Over Time</h2>
+                        <div style="display: flex; align-items: center;">
+                            <span class="mem-display-toggle-label">Memory Display</span>
+                            <div class="mem-display-toggle">
+                                <button class="active" data-mode="per-bank" onclick="toggleMemDisplay('memory-graph', this)">Per-Bank</button>
+                                <button data-mode="total" onclick="toggleMemDisplay('memory-graph', this)">Total</button>
+                            </div>
+                        </div>
+                    </div>
                     <div class="graph-container">
                         <div id="memory-graphs"></div>
                     </div>
@@ -798,11 +882,29 @@ class MemoryVisualizer:
                     {self._format_tile_padding_section(top_padding_ops)}
 
                     <!-- Peak Memory Analysis -->
-                    <h2>Peak Memory Analysis</h2>
+                    <div class="section-header">
+                        <h2>Peak Memory Analysis</h2>
+                        <div style="display: flex; align-items: center;">
+                            <span class="mem-display-toggle-label">Memory Display</span>
+                            <div class="mem-display-toggle">
+                                <button class="active" data-mode="per-bank" onclick="toggleMemDisplay('peak-analysis', this)">Per-Bank</button>
+                                <button data-mode="total" onclick="toggleMemDisplay('peak-analysis', this)">Total</button>
+                            </div>
+                        </div>
+                    </div>
                     {self._generate_peak_cards_html(peak_analysis)}
 
                     <!-- DRAM Usage Prime Suspects -->
-                    <h2>DRAM Usage Prime Suspects</h2>
+                    <div class="section-header">
+                        <h2>DRAM Usage Prime Suspects</h2>
+                        <div style="display: flex; align-items: center;">
+                            <span class="mem-display-toggle-label">Memory Display</span>
+                            <div class="mem-display-toggle">
+                                <button class="active" data-mode="per-bank" onclick="toggleMemDisplay('prime-suspects', this)">Per-Bank</button>
+                                <button data-mode="total" onclick="toggleMemDisplay('prime-suspects', this)">Total</button>
+                            </div>
+                        </div>
+                    </div>
                     {self._generate_top_ops_table_html(top_ops)}
                 </div>
             </div>
@@ -850,6 +952,103 @@ class MemoryVisualizer:
         const opsData = {json.dumps(ops_for_js)};
         const memData = {json.dumps(mem_for_js)};
         const hasIRData = {'true' if has_ir else 'false'};
+
+        // Memory display configuration
+        const memoryConfig = {json.dumps(memory_config_for_js)};
+        const memGraphTraceMemTypes = {json.dumps(memory_graph_trace_mem_types)};
+        const memGraphDisplayTypes = {json.dumps(memory_graph_display_types)};
+        var memGraphOrigY = [];
+        var memGraphOrigHovertemplates = [];
+        var unpaddedGraphOrigY = [];
+        var unpaddedGraphOrigHovertemplates = [];
+
+        // Per-section toggle state
+        const memDisplayState = {{}};
+
+        function toggleMemDisplay(section, btn) {{
+            var mode = btn.dataset.mode;
+            var toggle = btn.closest('.mem-display-toggle');
+            toggle.querySelectorAll('button').forEach(function(b) {{ b.classList.remove('active'); }});
+            btn.classList.add('active');
+            memDisplayState[section] = mode;
+            applyMemDisplayToggle(section, mode);
+        }}
+
+        function formatMemoryValue(mb) {{
+            var bytes = mb * 1024 * 1024;
+            if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+            if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            if (bytes < 0) return '0 B';
+            return Math.round(bytes) + ' B';
+        }}
+
+        function applyMemDisplayToggle(section, mode) {{
+            var isTotal = (mode === 'total');
+
+            // Update numeric values with data-per-bank attribute
+            document.querySelectorAll('[data-section="' + section + '"][data-per-bank]').forEach(function(el) {{
+                var perBankVal = parseFloat(el.dataset.perBank);
+                var memType = el.dataset.memType || 'DRAM';
+                var decimals = parseInt(el.dataset.decimals || '2');
+                var banks = isTotal ? (memoryConfig[memType] || 1) : 1;
+                var val = perBankVal * banks;
+                if (el.dataset.format === 'bytes') {{
+                    el.textContent = formatMemoryValue(val);
+                }} else {{
+                    el.textContent = val.toFixed(decimals);
+                }}
+            }});
+
+            // Update unit labels
+            document.querySelectorAll('[data-section="' + section + '"][data-unit-label]').forEach(function(el) {{
+                el.textContent = isTotal ? 'MB' : 'MB/bank';
+            }});
+
+            // Graph-specific updates
+            if (section === 'memory-graph') updateMemoryGraphDisplay(mode);
+            if (section === 'tile-padding') updateTilePaddingGraphDisplay(mode);
+        }}
+
+        function updateMemoryGraphDisplay(mode) {{
+            var graphEl = document.getElementById('memory-graphs');
+            if (!graphEl || !graphEl.data || !memGraphOrigY.length) return;
+            var isTotal = (mode === 'total');
+            var unit = isTotal ? 'MB' : 'MB/bank';
+
+            // Update Y values for all traces
+            for (var i = 0; i < graphEl.data.length; i++) {{
+                var mt = memGraphTraceMemTypes[i];
+                var banks = isTotal ? (memoryConfig[mt] || 1) : 1;
+                var newY = memGraphOrigY[i].map(function(v) {{ return v * banks; }});
+                var origHt = memGraphOrigHovertemplates[i];
+                var updates = {{y: [newY]}};
+                if (origHt) updates.hovertemplate = origHt.replace(/__UNIT__/g, unit);
+                Plotly.restyle(graphEl, updates, [i]);
+            }}
+
+            // Update y-axis title for currently visible memory type
+            var activeIdx = 0;
+            try {{ activeIdx = graphEl._fullLayout.updatemenus[0].active || 0; }} catch(e) {{}}
+            var activeMt = memGraphDisplayTypes[activeIdx] || 'DRAM';
+            Plotly.relayout(graphEl, {{'yaxis.title.text': activeMt + ' (' + unit + ')'}});
+        }}
+
+        function updateTilePaddingGraphDisplay(mode) {{
+            var graphEl = document.getElementById('unpadded-comparison-graph');
+            if (!graphEl || !graphEl.data || !unpaddedGraphOrigY.length) return;
+            var isTotal = (mode === 'total');
+            var banks = isTotal ? (memoryConfig['DRAM'] || 1) : 1;
+            var unit = isTotal ? 'MB' : 'MB/bank';
+
+            for (var i = 0; i < graphEl.data.length; i++) {{
+                var newY = unpaddedGraphOrigY[i].map(function(v) {{ return v * banks; }});
+                var origHt = unpaddedGraphOrigHovertemplates[i];
+                var updates = {{y: [newY]}};
+                if (origHt) updates.hovertemplate = origHt.replace(/__UNIT__/g, unit);
+                Plotly.restyle(graphEl, updates, [i]);
+            }}
+            Plotly.relayout(graphEl, {{'yaxis.title.text': 'DRAM (' + unit + ')'}});
+        }}
 
         // Track current highlighted line
         let currentHighlightedLine = null;
@@ -1027,12 +1226,15 @@ class MemoryVisualizer:
                 html += '<div class="op-popup-section">';
                 html += '<div class="op-popup-label">Memory at This Operation</div>';
                 html += '<div class="op-popup-mem-grid">';
+                var popupMode = memDisplayState['memory-graph'] || 'per-bank';
+                var popupUnit = (popupMode === 'total') ? 'MB' : 'MB/bank';
                 memTypes.forEach(function(mt) {{
                     if (mem[mt] !== undefined) {{
+                        var banks = (popupMode === 'total') ? (memoryConfig[mt] || 1) : 1;
                         html += '<div class="op-popup-mem-card">';
                         html += '<div class="mem-type">' + mt + '</div>';
-                        html += '<div class="mem-value">' + mem[mt].toFixed(2) + '</div>';
-                        html += '<div class="mem-unit">MB/bank</div>';
+                        html += '<div class="mem-value">' + (mem[mt] * banks).toFixed(2) + '</div>';
+                        html += '<div class="mem-unit">' + popupUnit + '</div>';
                         html += '</div>';
                     }}
                 }});
@@ -1103,9 +1305,49 @@ class MemoryVisualizer:
             // Create memory usage over time graphs
             Plotly.newPlot('memory-graphs', memoryData.traces, memoryData.layout, {{responsive: true}});
 
+            // Save original per-bank Y data and hover templates for memory graph
+            var mgEl = document.getElementById('memory-graphs');
+            if (mgEl && mgEl.data) {{
+                for (var i = 0; i < mgEl.data.length; i++) {{
+                    memGraphOrigY.push(mgEl.data[i].y.slice());
+                    memGraphOrigHovertemplates.push(mgEl.data[i].hovertemplate || '');
+                }}
+                // Apply initial unit to hover templates
+                for (var i = 0; i < mgEl.data.length; i++) {{
+                    var ht = memGraphOrigHovertemplates[i];
+                    if (ht && ht.indexOf('__UNIT__') !== -1) {{
+                        Plotly.restyle(mgEl, {{hovertemplate: ht.replace(/__UNIT__/g, 'MB/bank')}}, [i]);
+                    }}
+                }}
+                // Fix y-axis title when memory type buttons are clicked
+                mgEl.on('plotly_buttonclicked', function(evData) {{
+                    var mode = memDisplayState['memory-graph'] || 'per-bank';
+                    var unit = (mode === 'total') ? 'MB' : 'MB/bank';
+                    var btnIdx = evData.active;
+                    var mt = memGraphDisplayTypes[btnIdx] || 'DRAM';
+                    Plotly.relayout(mgEl, {{'yaxis.title.text': mt + ' (' + unit + ')'}});
+                }});
+            }}
+
             // Create unpadded comparison graph if data available
             if (unpaddedComparisonData && unpaddedComparisonData.traces && unpaddedComparisonData.traces.length > 0) {{
                 Plotly.newPlot('unpadded-comparison-graph', unpaddedComparisonData.traces, unpaddedComparisonData.layout, {{responsive: true}});
+
+                // Save original per-bank Y data and hover templates
+                var upEl = document.getElementById('unpadded-comparison-graph');
+                if (upEl && upEl.data) {{
+                    for (var i = 0; i < upEl.data.length; i++) {{
+                        unpaddedGraphOrigY.push(upEl.data[i].y.slice());
+                        unpaddedGraphOrigHovertemplates.push(upEl.data[i].hovertemplate || '');
+                    }}
+                    // Apply initial unit to hover templates
+                    for (var i = 0; i < upEl.data.length; i++) {{
+                        var ht = unpaddedGraphOrigHovertemplates[i];
+                        if (ht && ht.indexOf('__UNIT__') !== -1) {{
+                            Plotly.restyle(upEl, {{hovertemplate: ht.replace(/__UNIT__/g, 'MB/bank')}}, [i]);
+                        }}
+                    }}
+                }}
             }}
 
             // Click handler for memory graph
@@ -1220,7 +1462,7 @@ class MemoryVisualizer:
                     "customdata": list(
                         zip(op_names, input_shapes_list, output_shapes_list)
                     ),
-                    "hovertemplate": f"{mem_type}<br>Op %{{x}}: %{{customdata[0]}}<br>Allocated: %{{y:.2f}} MB/bank<br>Input: %{{customdata[1]}}<br>Output: %{{customdata[2]}}<extra></extra>",
+                    "hovertemplate": f"{mem_type}<br>Op %{{x}}: %{{customdata[0]}}<br>Allocated: %{{y:.2f}} __UNIT__<br>Input: %{{customdata[1]}}<br>Output: %{{customdata[2]}}<extra></extra>",
                 }
             )
             trace_mem_type.append(mem_type)
@@ -1245,7 +1487,7 @@ class MemoryVisualizer:
                                 weight_output_shapes,
                             )
                         ),
-                        "hovertemplate": f"{mem_type} (weight op)<br>Op %{{x}}: %{{customdata[0]}}<br>Allocated: %{{y:.2f}} MB/bank<br>Input: %{{customdata[1]}}<br>Output: %{{customdata[2]}}<extra></extra>",
+                        "hovertemplate": f"{mem_type} (weight op)<br>Op %{{x}}: %{{customdata[0]}}<br>Allocated: %{{y:.2f}} __UNIT__<br>Input: %{{customdata[1]}}<br>Output: %{{customdata[2]}}<extra></extra>",
                     }
                 )
                 trace_mem_type.append(mem_type)
@@ -1262,7 +1504,7 @@ class MemoryVisualizer:
                     "visible": (mem_type == "DRAM"),
                     "showlegend": True,
                     "legendgroup": "capacity",
-                    "hovertemplate": f"{mem_type} Capacity: %{{y:.2f}} MB/bank<extra></extra>",
+                    "hovertemplate": f"{mem_type} Capacity: %{{y:.2f}} __UNIT__<extra></extra>",
                 }
             )
             trace_mem_type.append(mem_type)
@@ -1336,7 +1578,7 @@ class MemoryVisualizer:
             },
         }
 
-        return {"traces": traces, "layout": layout}
+        return {"traces": traces, "layout": layout, "trace_mem_types": trace_mem_type, "display_types": display_types}
 
     def _prepare_fragmentation_data(self) -> Dict:
         """Prepare data for fragmentation visualization"""
@@ -1504,15 +1746,15 @@ class MemoryVisualizer:
             html_parts.append(
                 f"""
         <div class="peak-card" style="border-left-color: {color};">
-            <h3><span class="badge {mem_type.lower().replace('_', '-')}">{mem_type}</span> Peak: {peak_val:.2f} MB/bank at Operation #{data['index']}</h3>
+            <h3><span class="badge {mem_type.lower().replace('_', '-')}">{mem_type}</span> Peak: <span data-section="peak-analysis" data-per-bank="{peak_val}" data-mem-type="{mem_type}" data-decimals="2">{peak_val:.2f}</span> <span data-section="peak-analysis" data-unit-label>MB/bank</span> at Operation #{data['index']}</h3>
             <table>
                 <tr><td>Operation</td><td>{op_link}</td></tr>
                 <tr><td>Location</td><td><span class="code">{op['loc']}</span></td></tr>
                 <tr><td>Input Shapes</td><td><span class="code">{input_str}</span></td></tr>
                 <tr><td>Output Shapes</td><td><span class="code">{output_str}</span></td></tr>
                 <tr><td>Attributes</td><td><span class="code">{op['attributes'] if op['attributes'] else 'None'}</span></td></tr>
-                <tr><td>Free Space</td><td>{mem['totalBytesFreePerBank_MB']:.2f} MB/bank</td></tr>
-                <tr><td>Largest Contiguous Free</td><td>{mem['largestContiguousBytesFreePerBank_MB']:.2f} MB/bank</td></tr>
+                <tr><td>Free Space</td><td><span data-section="peak-analysis" data-per-bank="{mem['totalBytesFreePerBank_MB']}" data-mem-type="{mem_type}" data-decimals="2">{mem['totalBytesFreePerBank_MB']:.2f}</span> <span data-section="peak-analysis" data-unit-label>MB/bank</span></td></tr>
+                <tr><td>Largest Contiguous Free</td><td><span data-section="peak-analysis" data-per-bank="{mem['largestContiguousBytesFreePerBank_MB']}" data-mem-type="{mem_type}" data-decimals="2">{mem['largestContiguousBytesFreePerBank_MB']:.2f}</span> <span data-section="peak-analysis" data-unit-label>MB/bank</span></td></tr>
             </table>
         </div>"""
             )
@@ -1546,7 +1788,7 @@ class MemoryVisualizer:
                 <td>{idx}</td>
                 <td>{op_link}</td>
                 <td><span class="code">{op['loc']}</span></td>
-                <td>{dram:.2f}</td>
+                <td><span data-section="prime-suspects" data-per-bank="{dram}" data-mem-type="DRAM" data-decimals="2">{dram:.2f}</span></td>
                 <td><span class="code">{input_str}</span></td>
                 <td><span class="code">{output_str}</span></td>
             </tr>"""
@@ -1560,7 +1802,7 @@ class MemoryVisualizer:
                     <th>Index</th>
                     <th>Operation</th>
                     <th>Location</th>
-                    <th>DRAM Added (MB)</th>
+                    <th>DRAM Added (<span data-section="prime-suspects" data-unit-label>MB/bank</span>)</th>
                     <th>Input Shapes</th>
                     <th>Output Shapes</th>
                 </tr>
@@ -1856,32 +2098,38 @@ class MemoryVisualizer:
         if not indices:
             return {"traces": [], "layout": {}}
 
-        # Build customdata for hover
-        customdata = list(zip(op_names, unpadded_dram, padded_dram))
+        # Normalize to per-bank for consistency with other sections
+        num_banks = self.num_dram_banks
+        unpadded_dram_pb = [v / num_banks for v in unpadded_dram]
+        padded_dram_pb = [v / num_banks for v in padded_dram]
+
+        # Build customdata for hover (op names only; values shown via %{y})
+        customdata = [[name] for name in op_names]
 
         traces = [
             {
                 "x": indices,
-                "y": unpadded_dram,
+                "y": unpadded_dram_pb,
                 "type": "scatter",
                 "mode": "lines",
                 "name": "Unpadded (Logical)",
-                "line": {"width": 2, "color": "#1f77b4"},  # Blue
+                "line": {"width": 2, "color": "#1f77b4"},
                 "customdata": customdata,
-                "hovertemplate": "Op %{x}: %{customdata[0]}<br>Unpadded: %{customdata[1]:.2f} MB<br>Padded: %{customdata[2]:.2f} MB<extra></extra>",
+                "hovertemplate": "Op %{x}: %{customdata[0]}<br>Unpadded: %{y:.2f} __UNIT__<extra></extra>",
             },
             {
                 "x": indices,
-                "y": padded_dram,
+                "y": padded_dram_pb,
                 "type": "scatter",
                 "mode": "lines",
                 "name": "Padded (Tile-Aligned)",
-                "line": {"width": 2, "color": "#ff7f0e"},  # Orange
-                "hoverinfo": "skip",
+                "line": {"width": 2, "color": "#ff7f0e"},
+                "customdata": customdata,
+                "hovertemplate": "Op %{x}: %{customdata[0]}<br>Padded: %{y:.2f} __UNIT__<extra></extra>",
             },
         ]
 
-        # Calculate peak overhead for title
+        # Calculate peak overhead for title (ratio is unaffected by normalization)
         peak_overhead_pct = 0
         for i in range(len(unpadded_dram)):
             if unpadded_dram[i] > 0:
@@ -1904,7 +2152,7 @@ class MemoryVisualizer:
                 "linecolor": "rgba(204, 204, 220, 0.20)",
             },
             "yaxis": {
-                "title": {"text": "Total Memory (MB)", "font": {"color": "rgb(204, 204, 220)"}},
+                "title": {"text": "DRAM (MB/bank)", "font": {"color": "rgb(204, 204, 220)"}},
                 "tickfont": {"color": "rgb(204, 204, 220)"},
                 "gridcolor": "rgba(204, 204, 220, 0.08)",
                 "linecolor": "rgba(204, 204, 220, 0.20)",
@@ -1964,7 +2212,16 @@ class MemoryVisualizer:
 
         return f"""
         <!-- Tile Padding Memory Overhead -->
-        <h2>Tile Padding Memory Overhead (DRAM)</h2>
+        <div class="section-header">
+            <h2>Tile Padding Memory Overhead (DRAM)</h2>
+            <div style="display: flex; align-items: center;">
+                <span class="mem-display-toggle-label">Memory Display</span>
+                <div class="mem-display-toggle">
+                    <button class="active" data-mode="per-bank" onclick="toggleMemDisplay('tile-padding', this)">Per-Bank</button>
+                    <button data-mode="total" onclick="toggleMemDisplay('tile-padding', this)">Total</button>
+                </div>
+            </div>
+        </div>
         <p style="color: var(--text-secondary); margin-bottom: 15px;">
             Shows actual allocated memory vs theoretical minimum without 32x32 tile alignment.
         </p>
@@ -2031,24 +2288,33 @@ class MemoryVisualizer:
             overhead_pct = layout.get("overhead_pct", 0)
             absolute_overhead = padded_bytes - unpadded_bytes
 
-            # Format absolute overhead (always in MB for consistency)
-            overhead_mb = absolute_overhead / (1024 * 1024)
-            overhead_mb_str = f"{overhead_mb:.2f} MB"
+            # Per-bank equivalents for display and data attributes
+            num_banks = self.num_dram_banks
+            unpadded_per_bank = unpadded_bytes / num_banks
+            padded_per_bank = padded_bytes / num_banks
+            overhead_per_bank = absolute_overhead / num_banks
 
-            # Format sizes
-            if unpadded_bytes >= 1024 * 1024:
-                unpadded_str = f"{unpadded_bytes / (1024*1024):.2f} MB"
-            elif unpadded_bytes >= 1024:
-                unpadded_str = f"{unpadded_bytes / 1024:.1f} KB"
-            else:
-                unpadded_str = f"{unpadded_bytes} B"
+            # Per-bank MB values for data attributes
+            unpadded_per_bank_mb = unpadded_per_bank / (1024 * 1024)
+            padded_per_bank_mb = padded_per_bank / (1024 * 1024)
+            overhead_per_bank_mb = overhead_per_bank / (1024 * 1024)
 
-            if padded_bytes >= 1024 * 1024:
-                padded_str = f"{padded_bytes / (1024*1024):.2f} MB"
-            elif padded_bytes >= 1024:
-                padded_str = f"{padded_bytes / 1024:.1f} KB"
+            # Format per-bank sizes for initial display
+            if unpadded_per_bank >= 1024 * 1024:
+                unpadded_str = f"{unpadded_per_bank / (1024*1024):.2f} MB"
+            elif unpadded_per_bank >= 1024:
+                unpadded_str = f"{unpadded_per_bank / 1024:.1f} KB"
             else:
-                padded_str = f"{padded_bytes} B"
+                unpadded_str = f"{int(unpadded_per_bank)} B"
+
+            if padded_per_bank >= 1024 * 1024:
+                padded_str = f"{padded_per_bank / (1024*1024):.2f} MB"
+            elif padded_per_bank >= 1024:
+                padded_str = f"{padded_per_bank / 1024:.1f} KB"
+            else:
+                padded_str = f"{int(padded_per_bank)} B"
+
+            overhead_mb_str = f"{overhead_per_bank_mb:.2f} MB"
 
             # Format operation as clickable link
             op_link = self._format_op_link(op['mlir_op'], op.get('loc'))
@@ -2061,9 +2327,9 @@ class MemoryVisualizer:
                 <td>{op_link}</td>
                 <td><span class="code">{logical_shape} ({dtype})</span></td>
                 <td><span class="code">{padded_shape}</span></td>
-                <td>{unpadded_str}</td>
-                <td>{padded_str}</td>
-                <td style="font-weight: bold;">{overhead_mb_str}</td>
+                <td><span data-section="tile-padding" data-per-bank="{unpadded_per_bank_mb}" data-mem-type="DRAM" data-format="bytes">{unpadded_str}</span></td>
+                <td><span data-section="tile-padding" data-per-bank="{padded_per_bank_mb}" data-mem-type="DRAM" data-format="bytes">{padded_str}</span></td>
+                <td style="font-weight: bold;"><span data-section="tile-padding" data-per-bank="{overhead_per_bank_mb}" data-mem-type="DRAM" data-format="bytes">{overhead_mb_str}</span></td>
                 <td style="color: {'#ff6b6b' if overhead_pct > 100 else '#ff9900' if overhead_pct > 50 else 'inherit'};">{overhead_pct:.1f}%</td>
             </tr>"""
             )
@@ -2079,7 +2345,7 @@ class MemoryVisualizer:
                     <th>Padded Shape</th>
                     <th>Unpadded</th>
                     <th>Padded</th>
-                    <th>Overhead (MB)</th>
+                    <th>Overhead (<span data-section="tile-padding" data-unit-label>MB/bank</span>)</th>
                     <th>Overhead (%)</th>
                 </tr>
             </thead>
