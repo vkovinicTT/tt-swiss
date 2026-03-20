@@ -52,11 +52,29 @@ source venv/activate
 pip install git+https://github.com/vkovinicTT/tt-swiss.git
 ```
 
+### Editable Install (for development)
+
+If you want to modify tt-swiss and have changes reflected immediately:
+
+```bash
+cd /path/to/tt-swiss
+pip install -e .
+```
+
+> **Note**: Editable installs require `setuptools>=64`. If you get an error about a missing `build_editable` hook, upgrade setuptools first:
+> ```bash
+> pip install --upgrade setuptools pip
+> ```
+
 > **Note**: Always activate the tt-xla environment first (`source venv/activate`). This sets up the required paths for the model analyzer to find tt-xla's op-by-op test infrastructure.
 
 ## Memory profiler
 
 ### Usage
+
+#### Try It with Example Logs
+
+Example log files are included in `example_logs/` so you can try `ttmem` without running a model first.
 
 #### Interactive CLI (Recommended for Remote Development)
 
