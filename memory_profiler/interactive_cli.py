@@ -27,10 +27,12 @@ from typing import Optional, Tuple
 # Handle both package import and direct execution
 try:
     from .parser import parse_log_file, validate_outputs, validate_log_content
+    from .multihost import detect_multihost
     from .text_formatter import LLMTextFormatter
     from .run_profiled import sanitize_report_name, get_reports_dir
 except ImportError:
     from parser import parse_log_file, validate_outputs, validate_log_content
+    from multihost import detect_multihost
     from text_formatter import LLMTextFormatter
     from run_profiled import sanitize_report_name, get_reports_dir
 
@@ -239,6 +241,16 @@ def process_log_file(log_path: str) -> Optional[Path]:
     console.print()
     console.print(f"[dim]Output directory: {run_dir}[/dim]")
 
+    # Detect multihost logs
+    hosts = detect_multihost(str(log_file))
+    host_filter = None
+    if hosts:
+        host_filter = hosts[0]
+        console.print(
+            f"[yellow]Multihost log detected. Hosts found: {hosts}[/yellow]"
+        )
+        console.print(f"[yellow]Filtering to host: [{host_filter}][/yellow]")
+
     # Step 1: Parse log file
     with console.status("[bold cyan]Parsing log file...", spinner="dots") as status:
         try:
@@ -248,6 +260,7 @@ def process_log_file(log_path: str) -> Optional[Path]:
                 str(ops_output),
                 str(registry_output),
                 str(ir_output),
+                host_filter=host_filter,
             )
         except Exception as e:
             console.print(f"[red]Error parsing log file: {e}[/red]")
@@ -455,6 +468,12 @@ def generate_llm_report(log_path: str, output_file: Optional[Path] = None) -> in
     registry_output = run_dir / f"{report_name}_inputs_registry.json"
     ir_output = run_dir / f"{report_name}_ir.json"
 
+    # Detect multihost logs
+    hosts = detect_multihost(log_path)
+    host_filter = hosts[0] if hosts else None
+    if host_filter and output_file:
+        print(f"Multihost log detected. Filtering to host: [{host_filter}]", file=sys.stderr)
+
     # Parse log file (suppress output when generating to stdout)
     try:
         if output_file:
@@ -467,6 +486,7 @@ def generate_llm_report(log_path: str, output_file: Optional[Path] = None) -> in
             str(ops_output),
             str(registry_output),
             str(ir_output),
+            host_filter=host_filter,
         )
     except Exception as e:
         print(f"Error parsing log file: {e}", file=sys.stderr)

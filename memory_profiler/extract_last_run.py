@@ -22,6 +22,11 @@ import tempfile
 import shutil
 from pathlib import Path
 
+try:
+    from .multihost import strip_mpi_prefix
+except ImportError:
+    from multihost import strip_mpi_prefix
+
 
 def extract_last_run(log_file_path: Path) -> None:
     """
@@ -51,7 +56,7 @@ def extract_last_run(log_file_path: Path) -> None:
             for line_num, line in enumerate(fin, 1):
                 total_lines = line_num
                 if not marker_found:
-                    if marker in line:
+                    if marker in strip_mpi_prefix(line):
                         marker_found = True
                         marker_line = line_num
                         continue  # skip the marker line itself
