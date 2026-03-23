@@ -13,6 +13,11 @@ for parsers that need to peek at upcoming lines.
 from collections import deque
 from typing import List, Optional
 
+try:
+    from .multihost import line_matches_host, strip_mpi_prefix
+except ImportError:
+    from multihost import line_matches_host, strip_mpi_prefix
+
 
 class BufferedLineReader:
     """
@@ -23,25 +28,36 @@ class BufferedLineReader:
     - peek(offset): look ahead by `offset` lines from current
     - peek_slice(start, count): get a list of lines for look-ahead parsing
     - advance(): move forward one line
+
+    When host_filter is set (e.g., '1,0'), only lines from that MPI host
+    are returned, with the [rank,device]<stdout>: prefix stripped.
     """
 
-    def __init__(self, file_path: str, buffer_size: int = 10):
+    def __init__(self, file_path: str, buffer_size: int = 10, host_filter: str = None):
         self._file = open(file_path, "r", encoding="utf-8", errors="replace")
         self._buffer: deque = deque()
         self._buffer_size = buffer_size
+        self._host_filter = host_filter
         self._exhausted = False
         self._lines_consumed = 0  # total lines that have passed through
         self._fill()
 
     def _fill(self) -> None:
-        """Fill the buffer up to buffer_size."""
+        """Fill the buffer up to buffer_size.
+
+        When host_filter is set, skips lines from other hosts and strips
+        the MPI prefix from matching lines.
+        """
         while len(self._buffer) < self._buffer_size and not self._exhausted:
             line = self._file.readline()
-            if line:
-                self._buffer.append(line)
-            else:
+            if not line:
                 self._exhausted = True
                 break
+            if self._host_filter is not None:
+                if not line_matches_host(line, self._host_filter):
+                    continue
+                line = strip_mpi_prefix(line)
+            self._buffer.append(line)
 
     @property
     def has_lines(self) -> bool:

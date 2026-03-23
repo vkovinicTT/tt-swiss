@@ -18,6 +18,7 @@ try:
     from .memory_parser import parse_memory_stats
     from .mlir_parser import parse_mlir_operation
     from .mem_logger import log_mem
+    from .multihost import detect_multihost, strip_mpi_prefix
     from .streaming_reader import BufferedLineReader
 except ImportError:
     from inputs_registry_parser import parse_inputs_registry
@@ -25,6 +26,7 @@ except ImportError:
     from memory_parser import parse_memory_stats
     from mlir_parser import parse_mlir_operation
     from mem_logger import log_mem
+    from multihost import detect_multihost, strip_mpi_prefix
     from streaming_reader import BufferedLineReader
 
 
@@ -82,6 +84,7 @@ def parse_log_file(
     ops_output: str,
     registry_output: Optional[str] = None,
     ir_output: Optional[str] = None,
+    host_filter: Optional[str] = None,
 ) -> None:
     """
     Parse log file and generate synchronized JSON outputs.
@@ -92,13 +95,23 @@ def parse_log_file(
         ops_output: Path for operation details JSON output
         registry_output: Optional path for inputs registry JSON output
         ir_output: Optional path for IR modules JSON output (TTIR/TTNN)
+        host_filter: Optional MPI host to filter to (e.g., '1,0').
+                     If None and multihost is detected, defaults to first host found.
     """
     log_mem("parse_log_file: start")
     operations = []
     memory_stats = []
 
+    # Auto-detect multihost logs and pick default host
+    hosts = detect_multihost(log_path)
+    if hosts and host_filter is None:
+        host_filter = hosts[0]
+    if host_filter:
+        print(f"Multihost log detected. Hosts found: {hosts}")
+        print(f"Filtering to host: [{host_filter}]")
+
     try:
-        reader = BufferedLineReader(log_path, buffer_size=10)
+        reader = BufferedLineReader(log_path, buffer_size=10, host_filter=host_filter)
     except FileNotFoundError:
         print(f"Error: Log file not found: {log_path}", file=sys.stderr)
         return
@@ -251,7 +264,7 @@ def parse_log_file(
     registry = None
     weight_lookup = {}
     if registry_output:
-        registry = parse_inputs_registry(log_path)
+        registry = parse_inputs_registry(log_path, host_filter=host_filter)
 
         # Build lookup by shape: shape -> registry entry (only for weights)
         # This allows matching based on tensor shape rather than SSA names
@@ -433,7 +446,7 @@ def parse_log_file(
     # Parse and write IR modules if requested
     if ir_output:
         try:
-            ir_data = parse_ir_modules(log_path)
+            ir_data = parse_ir_modules(log_path, host_filter=host_filter)
             with open(ir_output, "w", encoding="utf-8") as f:
                 json.dump(ir_data, f, indent=2)
             print(f"IR modules written to: {ir_output}")
@@ -544,6 +557,7 @@ def validate_log_content(log_path: str) -> Optional[str]:
     """
     Fast-scan a log file for required data markers.
     Returns None if valid, or a diagnostic message string if incomplete.
+    Handles multihost MPI-prefixed log lines by stripping prefixes before checking.
     """
     has_operations = False
     has_memory_states = False
@@ -551,9 +565,10 @@ def validate_log_content(log_path: str) -> Optional[str]:
     try:
         with open(log_path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
-                if not has_operations and "Executing operation:" in line and "RuntimeTTNN" in line:
+                cleaned = strip_mpi_prefix(line)
+                if not has_operations and "Executing operation:" in cleaned and "RuntimeTTNN" in cleaned:
                     has_operations = True
-                if not has_memory_states and "Device memory state before operation" in line:
+                if not has_memory_states and "Device memory state before operation" in cleaned:
                     has_memory_states = True
                 if has_operations and has_memory_states:
                     return None

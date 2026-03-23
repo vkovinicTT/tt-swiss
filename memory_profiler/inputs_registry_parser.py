@@ -17,8 +17,10 @@ from typing import Dict, List, Optional, Tuple
 
 try:
     from .mem_logger import log_mem
+    from .multihost import line_matches_host, strip_mpi_prefix
 except ImportError:
     from mem_logger import log_mem
+    from multihost import line_matches_host, strip_mpi_prefix
 
 # Dtype sizes in bytes
 DTYPE_SIZES = {
@@ -216,10 +218,17 @@ def parse_func_signature(lines: List[str], start_idx: int, end_idx: int) -> str:
     return " ".join(signature_parts)
 
 
-def _stream_extract_section(log_path: str, section_name: str) -> Optional[List[str]]:
+def _stream_extract_section(
+    log_path: str, section_name: str, host_filter: Optional[str] = None
+) -> Optional[List[str]]:
     """
     Stream through a log file and extract only the lines belonging to an MLIR
     module section, without loading the entire file into memory.
+
+    Args:
+        log_path: Path to the log file
+        section_name: MLIR module section name to find
+        host_filter: Optional MPI host to filter to (e.g., '1,0')
 
     Returns:
         List of lines from section start to end (inclusive), or None if not found.
@@ -229,6 +238,10 @@ def _stream_extract_section(log_path: str, section_name: str) -> Optional[List[s
 
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
+            if host_filter is not None:
+                if not line_matches_host(line, host_filter):
+                    continue
+                line = strip_mpi_prefix(line)
             if not in_section:
                 if f"MLIR Module {section_name}:" in line:
                     in_section = True
@@ -241,7 +254,7 @@ def _stream_extract_section(log_path: str, section_name: str) -> Optional[List[s
     return None if not in_section else section_lines
 
 
-def parse_inputs_registry(log_path: str) -> Dict:
+def parse_inputs_registry(log_path: str, host_filter: Optional[str] = None) -> Dict:
     """
     Parse MLIR module from log to extract function argument registry.
 
@@ -253,6 +266,7 @@ def parse_inputs_registry(log_path: str) -> Dict:
 
     Args:
         log_path: Path to the log file
+        host_filter: Optional MPI host to filter to (e.g., '1,0')
 
     Returns:
         Dictionary with 'metadata' and 'entries' keys
@@ -265,7 +279,9 @@ def parse_inputs_registry(log_path: str) -> Dict:
 
     try:
         for target_section in section_names_to_try:
-            section_lines = _stream_extract_section(log_path, target_section)
+            section_lines = _stream_extract_section(
+                log_path, target_section, host_filter=host_filter
+            )
             if section_lines is not None:
                 break
     except FileNotFoundError:

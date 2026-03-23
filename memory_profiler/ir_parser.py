@@ -18,8 +18,10 @@ from typing import Dict, List, Optional, Tuple
 
 try:
     from .mem_logger import log_mem
+    from .multihost import line_matches_host, strip_mpi_prefix
 except ImportError:
     from mem_logger import log_mem
+    from multihost import line_matches_host, strip_mpi_prefix
 
 
 def find_ir_module_boundaries(
@@ -69,9 +71,11 @@ def extract_module_text(lines: List[str], start_idx: int, end_idx: int) -> str:
     module_lines = []
     for i in range(start_idx + 1, end_idx):
         line = lines[i]
+        # Remove MPI host prefix if present (e.g., [1,0]<stdout>:)
+        cleaned = strip_mpi_prefix(line)
         # Remove common log prefixes (timestamps, log levels, etc.)
         # Pattern: optional timestamp, optional log level, then content
-        cleaned = re.sub(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+\s+", "", line)
+        cleaned = re.sub(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+\s+", "", cleaned)
         cleaned = re.sub(r"^(DEBUG|INFO|WARNING|ERROR)\s+", "", cleaned)
         # Remove RuntimeTTNN prefix if present
         cleaned = re.sub(r"^RuntimeTTNN:\s*", "", cleaned)
@@ -150,10 +154,16 @@ def build_loc_line_index(ir_text: str) -> Dict[str, int]:
     return loc_index
 
 
-def _stream_extract_ir_sections(log_path: str) -> Dict[str, List[str]]:
+def _stream_extract_ir_sections(
+    log_path: str, host_filter: Optional[str] = None
+) -> Dict[str, List[str]]:
     """
     Stream through a log file and extract only the TTIR and TTNN module
     sections, without loading the entire file into memory.
+
+    Args:
+        log_path: Path to the log file
+        host_filter: Optional MPI host to filter to (e.g., '1,0')
 
     Returns:
         Dict mapping module type ('ttir', 'ttnn') to list of section lines.
@@ -164,6 +174,10 @@ def _stream_extract_ir_sections(log_path: str) -> Dict[str, List[str]]:
 
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
+            if host_filter is not None:
+                if not line_matches_host(line, host_filter):
+                    continue
+                line = strip_mpi_prefix(line)
             if current_type is None:
                 # Check for section start - only exact ttir: or ttnn: matches
                 for mod_type in ("ttir", "ttnn"):
@@ -184,7 +198,7 @@ def _stream_extract_ir_sections(log_path: str) -> Dict[str, List[str]]:
     return sections
 
 
-def parse_ir_modules(log_path: str) -> Dict:
+def parse_ir_modules(log_path: str, host_filter: Optional[str] = None) -> Dict:
     """
     Parse IR modules from a log file.
 
@@ -193,6 +207,7 @@ def parse_ir_modules(log_path: str) -> Dict:
 
     Args:
         log_path: Path to the log file
+        host_filter: Optional MPI host to filter to (e.g., '1,0')
 
     Returns:
         Dictionary with structure:
@@ -204,7 +219,7 @@ def parse_ir_modules(log_path: str) -> Dict:
     """
     log_mem("parse_ir_modules: start")
     try:
-        sections = _stream_extract_ir_sections(log_path)
+        sections = _stream_extract_ir_sections(log_path, host_filter=host_filter)
     except FileNotFoundError:
         print(f"Error: Log file not found: {log_path}", file=sys.stderr)
         return {"ttir": {"text": "", "loc_index": {}}, "ttnn": {"text": "", "loc_index": {}}}
