@@ -15,14 +15,14 @@ from typing import Dict, List, Optional
 try:
     from .inputs_registry_parser import parse_inputs_registry
     from .ir_parser import parse_ir_modules
-    from .memory_parser import parse_memory_stats
+    from .memory_parser import parse_memory_stats, extract_device_id, filter_lines_by_device
     from .mlir_parser import parse_mlir_operation
     from .mem_logger import log_mem
     from .streaming_reader import BufferedLineReader
 except ImportError:
     from inputs_registry_parser import parse_inputs_registry
     from ir_parser import parse_ir_modules
-    from memory_parser import parse_memory_stats
+    from memory_parser import parse_memory_stats, extract_device_id, filter_lines_by_device
     from mlir_parser import parse_mlir_operation
     from mem_logger import log_mem
     from streaming_reader import BufferedLineReader
@@ -98,7 +98,7 @@ def parse_log_file(
     memory_stats = []
 
     try:
-        reader = BufferedLineReader(log_path, buffer_size=10)
+        reader = BufferedLineReader(log_path, buffer_size=30)
     except FileNotFoundError:
         print(f"Error: Log file not found: {log_path}", file=sys.stderr)
         return
@@ -184,7 +184,11 @@ def parse_log_file(
                 continue
 
             # Look ahead for memory stats using the buffer (no full-file load)
-            lookahead = reader.peek_slice(1, 6)
+            # For multi-device logs ([X,Y]<stdout>: prefix), filter lookahead
+            # to only lines from the same device as the operation line
+            device_id = extract_device_id(line)
+            lookahead = reader.peek_slice(1, 20)
+            lookahead = filter_lines_by_device(lookahead, device_id)
             mem_info = parse_memory_stats(lookahead, 0)
 
             if mem_info:
