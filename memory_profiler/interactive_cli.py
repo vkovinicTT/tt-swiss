@@ -21,6 +21,7 @@ import socket
 import socketserver
 import sys
 import threading
+import traceback
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -251,6 +252,7 @@ def process_log_file(log_path: str) -> Optional[Path]:
             )
         except Exception as e:
             console.print(f"[red]Error parsing log file: {e}[/red]")
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
             return None
 
     # Step 2: Validate outputs
@@ -266,6 +268,7 @@ def process_log_file(log_path: str) -> Optional[Path]:
             report_path = visualizer.generate_report()
         except Exception as e:
             console.print(f"[red]Error generating report: {e}[/red]")
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
             return None
 
     return report_path
@@ -630,6 +633,7 @@ def main() -> int:
         return 1
     except Exception as e:
         console.print(f"[red]Unexpected error: {e}[/red]")
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
         return 1
 
 
