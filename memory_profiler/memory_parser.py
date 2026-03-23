@@ -11,6 +11,27 @@ import sys
 from typing import Dict, List, Optional
 
 
+def extract_device_id(line: str) -> Optional[str]:
+    """
+    Extract device ID prefix from a log line, e.g. '[1,0]' from '[1,0]<stdout>: ...'.
+
+    Returns the device ID string (e.g. '[1,0]') or None if no prefix is present.
+    """
+    match = re.match(r"(\[\d+,\d+\])", line)
+    return match.group(1) if match else None
+
+
+def filter_lines_by_device(lines: List[str], device_id: Optional[str]) -> List[str]:
+    """
+    Filter a list of lines to only those matching the given device ID.
+
+    If device_id is None (single-device logs), returns all lines unchanged.
+    """
+    if device_id is None:
+        return lines
+    return [l for l in lines if l.startswith(device_id)]
+
+
 def parse_memory_stats(lines: List[str], start_idx: int) -> Optional[Dict]:
     """
     Parse memory statistics block starting from start_idx.
