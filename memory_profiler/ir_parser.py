@@ -18,8 +18,10 @@ from typing import Dict, List, Optional, Tuple
 
 try:
     from .mem_logger import log_mem
+    from .streaming_reader import strip_log_prefix
 except ImportError:
     from mem_logger import log_mem
+    from streaming_reader import strip_log_prefix
 
 
 def find_ir_module_boundaries(
@@ -69,9 +71,12 @@ def extract_module_text(lines: List[str], start_idx: int, end_idx: int) -> str:
     module_lines = []
     for i in range(start_idx + 1, end_idx):
         line = lines[i]
+        # Remove multi-device/process prefix (already stripped by streaming,
+        # but handle it here too for lines passed in directly)
+        cleaned = strip_log_prefix(line)
         # Remove common log prefixes (timestamps, log levels, etc.)
         # Pattern: optional timestamp, optional log level, then content
-        cleaned = re.sub(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+\s+", "", line)
+        cleaned = re.sub(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+\s+", "", cleaned)
         cleaned = re.sub(r"^(DEBUG|INFO|WARNING|ERROR)\s+", "", cleaned)
         # Remove RuntimeTTNN prefix if present
         cleaned = re.sub(r"^RuntimeTTNN:\s*", "", cleaned)
@@ -163,7 +168,8 @@ def _stream_extract_ir_sections(log_path: str) -> Dict[str, List[str]]:
     current_lines: List[str] = []
 
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
+        for raw_line in f:
+            line = strip_log_prefix(raw_line)
             if current_type is None:
                 # Check for section start - only exact ttir: or ttnn: matches
                 for mod_type in ("ttir", "ttnn"):

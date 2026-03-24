@@ -17,8 +17,10 @@ from typing import Dict, List, Optional, Tuple
 
 try:
     from .mem_logger import log_mem
+    from .streaming_reader import strip_log_prefix
 except ImportError:
     from mem_logger import log_mem
+    from streaming_reader import strip_log_prefix
 
 # Dtype sizes in bytes
 DTYPE_SIZES = {
@@ -228,7 +230,8 @@ def _stream_extract_section(log_path: str, section_name: str) -> Optional[List[s
     in_section = False
 
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
+        for raw_line in f:
+            line = strip_log_prefix(raw_line)
             if not in_section:
                 if f"MLIR Module {section_name}:" in line:
                     in_section = True
