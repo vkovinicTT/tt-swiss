@@ -37,3 +37,6 @@ ttmem-web = "memory_profiler.web_server:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["memory_profiler*", "ttchop*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

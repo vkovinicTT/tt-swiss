@@ -357,3 +357,148 @@ def parse_mlir_operation(line: str) -> Optional[Dict]:
         "output_layout_info": output_layout_info,
         "loc": location,
     }
+
+
+def extract_ir_op_sequence(ttnn_text: str) -> List[Dict]:
+    """
+    Parse TTNN IR module text to extract ordered operations with layout info.
+
+    Resolves layout/buffer aliases, then walks each operation line to produce
+    a sequence usable for tile padding backfill on secondary-path logs.
+
+    Returns list of dicts for ALL ops (including deallocate/get_device):
+        {
+            "ssa": "%1" or None,
+            "op": "mesh_shard",
+            "inputs": ["%arg0", "%0"],
+            "output_layout_info": {...} or None,
+            "is_deallocate": bool,
+            "is_get_device": bool,
+            "deallocated_ssa": "%arg0" or None,
+        }
+    """
+    if not ttnn_text:
+        return []
+
+    lines = ttnn_text.split("\n")
+
+    # --- Pass 1: collect aliases ---
+    layout_aliases = {}   # "#ttnn_layout1" -> "#ttnn.ttnn_layout<...>"
+    buffer_aliases = {}   # "#dram" -> "#ttnn.buffer_type<dram>"
+    loc_aliases = {}      # "#loc3" -> "add.12"
+
+    layout_re = re.compile(r'^(#ttnn_layout\w*)\s*=\s*(#ttnn\.ttnn_layout<.+>)\s*$')
+    buffer_re = re.compile(r'^(#\w+)\s*=\s*(#ttnn\.buffer_type<\w+>)\s*$')
+    loc_alias_re = re.compile(r'^(#loc\d*)\s*=\s*loc\("([^"]+)"')
+
+    for line in lines:
+        stripped = line.strip()
+        # Check loc aliases (e.g., #loc3 = loc("add.12"))
+        lm = loc_alias_re.match(stripped)
+        if lm:
+            loc_aliases[lm.group(1)] = lm.group(2)
+        m = layout_re.match(stripped)
+        if m:
+            layout_aliases[m.group(1)] = m.group(2)
+            continue
+        m = buffer_re.match(stripped)
+        if m:
+            buffer_aliases[m.group(1)] = m.group(2)
+
+    def resolve_aliases(type_str: str) -> str:
+        """Replace layout and buffer aliases with their full definitions."""
+        s = type_str
+        # Resolve layout aliases (longest first to avoid partial matches)
+        for alias in sorted(layout_aliases, key=len, reverse=True):
+            if alias in s:
+                expanded = layout_aliases[alias]
+                # Also resolve buffer aliases inside the expanded layout
+                for ba, be in buffer_aliases.items():
+                    expanded = expanded.replace(ba, be)
+                s = s.replace(alias, expanded)
+        # Resolve any remaining buffer aliases in the string
+        for alias, expansion in buffer_aliases.items():
+            s = s.replace(alias, expansion)
+        return s
+
+    def resolve_loc(line_str: str) -> Optional[str]:
+        """Extract MLIR location name, resolving aliases like loc(#loc3)."""
+        # Try alias form: loc(#locN)
+        m = re.search(r'loc\((#loc\d*)\)', line_str)
+        if m:
+            return loc_aliases.get(m.group(1))
+        # Try inline form: loc("name")
+        m = re.search(r'loc\("([^"]+)"', line_str)
+        return m.group(1) if m else None
+
+    # --- Pass 2: walk operations ---
+    # Op with SSA result: %N = "ttnn.xxx"(inputs) ...
+    op_re = re.compile(r'(%\d+)\s*=\s*"ttnn\.(\w+)"\(([^)]*)\)')
+    # Op without result (deallocate): "ttnn.deallocate"(%x) ...
+    dealloc_re = re.compile(r'"ttnn\.deallocate"\((%[\w]+)\)')
+
+    result = []
+    for line in lines:
+        stripped = line.strip()
+
+        # Check deallocate first (no SSA result)
+        dm = dealloc_re.search(stripped)
+        if dm:
+            result.append({
+                "ssa": None,
+                "op": "deallocate",
+                "inputs": [dm.group(1)],
+                "output_layout_info": None,
+                "is_deallocate": True,
+                "is_get_device": False,
+                "deallocated_ssa": dm.group(1),
+                "loc": resolve_loc(stripped),
+            })
+            continue
+
+        # Check ops with SSA result
+        om = op_re.search(stripped)
+        if not om:
+            continue
+
+        ssa = om.group(1)
+        op_name = om.group(2)
+        inputs_str = om.group(3)
+        input_list = [i.strip() for i in inputs_str.split(",") if i.strip()]
+
+        if op_name == "get_device":
+            result.append({
+                "ssa": ssa,
+                "op": "get_device",
+                "inputs": input_list,
+                "output_layout_info": None,
+                "is_deallocate": False,
+                "is_get_device": True,
+                "deallocated_ssa": None,
+                "loc": None,
+            })
+            continue
+
+        # Extract output type: find type signature, split at top-level arrow
+        output_layout = None
+        type_sig_match = re.search(r'[>)]\s*:\s*(.+)\s+loc\(', stripped)
+        if type_sig_match:
+            type_sig = type_sig_match.group(1)
+            arrow_pos = find_top_level_arrow(type_sig)
+            if arrow_pos != -1:
+                output_type_str = type_sig[arrow_pos + 4:].strip()
+                resolved = resolve_aliases(output_type_str)
+                output_layout = parse_tensor_layout_info(resolved)
+
+        result.append({
+            "ssa": ssa,
+            "op": op_name,
+            "inputs": input_list,
+            "output_layout_info": output_layout,
+            "is_deallocate": False,
+            "is_get_device": False,
+            "deallocated_ssa": None,
+            "loc": resolve_loc(stripped),
+        })
+
+    return result
