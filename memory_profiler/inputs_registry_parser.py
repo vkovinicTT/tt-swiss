@@ -241,6 +241,113 @@ def _stream_extract_section(log_path: str, section_name: str) -> Optional[List[s
     return None if not in_section else section_lines
 
 
+def _stream_extract_all_sections(log_path: str, section_name: str) -> List[List[str]]:
+    """
+    Stream through a log file and extract ALL occurrences of an MLIR module section.
+    Returns a list of line-lists, one per occurrence.
+    """
+    results: List[List[str]] = []
+    section_lines: List[str] = []
+    in_section = False
+
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if not in_section:
+                if f"MLIR Module {section_name}:" in line:
+                    in_section = True
+                    section_lines = [line]
+            else:
+                section_lines.append(line)
+                if "END OF MLIR MODULE" in line:
+                    results.append(section_lines)
+                    in_section = False
+                    section_lines = []
+
+    return results
+
+
+def _parse_registry_from_section(section_lines: List[str]) -> Dict:
+    """Parse a single MLIR module section into an inputs registry dict."""
+    start_idx = 0
+    end_idx = len(section_lines) - 1
+    signature = parse_func_signature(section_lines, start_idx, end_idx)
+
+    if not signature:
+        return {"metadata": {}, "entries": []}
+
+    args_match = re.search(r"@main\((.+?)\)\s*(?:->|{)", signature, re.DOTALL)
+    if not args_match:
+        return {"metadata": {}, "entries": []}
+
+    args_str = args_match.group(1)
+
+    entries: List[Dict] = []
+    current_arg: List[str] = []
+    brace_depth = 0
+
+    for char in args_str:
+        if char == "{":
+            brace_depth += 1
+        elif char == "}":
+            brace_depth -= 1
+        elif char == "," and brace_depth == 0:
+            arg_str = "".join(current_arg).strip()
+            if arg_str:
+                entry = parse_argument(arg_str, len(entries))
+                if entry:
+                    entries.append(entry)
+            current_arg = []
+            continue
+        current_arg.append(char)
+
+    arg_str = "".join(current_arg).strip()
+    if arg_str:
+        entry = parse_argument(arg_str, len(entries))
+        if entry:
+            entries.append(entry)
+
+    total_weights = sum(1 for e in entries if e["type"] in ("parameter", "constant"))
+    total_inputs = sum(1 for e in entries if e["type"] == "input")
+    total_weight_bytes = sum(
+        e["bytes"] for e in entries if e["type"] in ("parameter", "constant")
+    )
+
+    return {
+        "metadata": {
+            "total_entries": len(entries),
+            "total_weights": total_weights,
+            "total_inputs": total_inputs,
+            "total_weight_bytes": total_weight_bytes,
+            "total_weight_MB": total_weight_bytes / (1024 * 1024),
+        },
+        "entries": entries,
+    }
+
+
+def parse_all_inputs_registries(log_path: str) -> List[Dict]:
+    """
+    Parse ALL MLIR shlo_frontend module sections from a log file (multi-program support).
+    Returns a list of registry dicts, one per program.
+    """
+    log_mem("parse_all_inputs_registries: start")
+    section_names_to_try = ["shlo_frontend", "shlo_compiler", "shlo"]
+
+    for target_section in section_names_to_try:
+        try:
+            all_sections = _stream_extract_all_sections(log_path, target_section)
+        except Exception as e:
+            print(f"Error reading registry sections: {e}", file=sys.stderr)
+            return []
+        if all_sections:
+            break
+    else:
+        return []
+
+    result = [_parse_registry_from_section(sec) for sec in all_sections]
+    log_mem("parse_all_inputs_registries: done")
+    return result
+
+
 def parse_inputs_registry(log_path: str) -> Dict:
     """
     Parse MLIR module from log to extract function argument registry.

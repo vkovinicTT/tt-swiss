@@ -75,11 +75,33 @@ class MemoryVisualizer:
             self.mem_metadata = None
             self.mem_data = mem_json
 
-        # Detect available memory types - only include types present in ALL operations
+        # Extract program list from metadata (multi-program support)
+        self.programs = []
+        if self.mem_metadata and "programs" in self.mem_metadata:
+            self.programs = self.mem_metadata["programs"]
+        if not self.programs and self.mem_data:
+            self.programs = [{"name": "main", "start_op_index": 0, "end_op_index": len(self.mem_data) - 1}]
+
+        # Build per-program IR data (handle both old flat format and new programs format)
+        self.ir_programs = []
+        if self.ir_data:
+            if "programs" in self.ir_data:
+                self.ir_programs = self.ir_data["programs"]
+            else:
+                # Old format: single program
+                self.ir_programs = [{
+                    "name": "main",
+                    "ttir": self.ir_data.get("ttir", {"text": "", "loc_index": {}}),
+                    "ttnn": self.ir_data.get("ttnn", {"text": "", "loc_index": {}}),
+                }]
+
+        # Detect available memory types from the first operation
+        # (some ops may have incomplete memory blocks in multihost logs)
         self.available_memory_types = []
         if self.mem_data:
+            first_mem = self.mem_data[0].get("memory", {})
             for mt in ["DRAM", "L1", "L1_SMALL", "TRACE"]:
-                if all(mt in op.get("memory", {}) for op in self.mem_data):
+                if mt in first_mem:
                     self.available_memory_types.append(mt)
 
         # Cache DRAM bank count for per-bank/total conversions
@@ -121,11 +143,12 @@ class MemoryVisualizer:
 
     def _has_ir_data(self) -> bool:
         """Check if IR data is available and non-empty."""
-        if not self.ir_data:
+        if not self.ir_programs:
             return False
-        ttir = self.ir_data.get("ttir", {})
-        ttnn = self.ir_data.get("ttnn", {})
-        return bool(ttir.get("text") or ttnn.get("text"))
+        for prog in self.ir_programs:
+            if prog.get("ttir", {}).get("text") or prog.get("ttnn", {}).get("text"):
+                return True
+        return False
 
     def _escape_html(self, text: str) -> str:
         """Escape HTML special characters."""
@@ -145,12 +168,13 @@ class MemoryVisualizer:
         # Make the operation clickable - links to TTNN by default (most useful)
         return f'<a href="#" class="op-link code" data-loc="{self._escape_html(loc)}" onclick="navigateToIR(\'{self._escape_html(loc)}\', \'ttnn\'); return false;">{self._escape_html(mlir_op)}</a>'
 
-    def _generate_ir_html(self, ir_name: str) -> str:
+    def _generate_ir_html(self, ir_name: str, program_idx: int = 0) -> str:
         """Generate HTML for displaying an IR module with line numbers."""
-        if not self.ir_data:
+        if not self.ir_programs or program_idx >= len(self.ir_programs):
             return '<div class="ir-empty">No IR data available</div>'
 
-        ir_info = self.ir_data.get(ir_name, {})
+        prog = self.ir_programs[program_idx]
+        ir_info = prog.get(ir_name, {})
         ir_text = ir_info.get("text", "")
 
         if not ir_text:
@@ -158,18 +182,54 @@ class MemoryVisualizer:
 
         lines = ir_text.split("\n")
         html_lines = []
+        # Use program-scoped IDs so multiple programs don't conflict
+        id_prefix = f"p{program_idx}-{ir_name}"
 
         for line_num, line in enumerate(lines, start=1):
             escaped_line = self._escape_html(line)
-            # Add id for scrolling to specific lines
             html_lines.append(
-                f'<div class="ir-line" id="{ir_name}-line-{line_num}">'
+                f'<div class="ir-line" id="{id_prefix}-line-{line_num}">'
                 f'<span class="line-num">{line_num}</span>'
                 f'<span class="line-content">{escaped_line}</span>'
                 f'</div>'
             )
 
         return "\n".join(html_lines)
+
+    def _generate_ir_programs_html(self) -> str:
+        """Generate per-program IR tabs HTML."""
+        if not self.ir_programs:
+            return '<div class="ir-empty">No IR data available</div>'
+
+        multi = len(self.ir_programs) > 1
+        html = ""
+
+        # Outer program tabs (only shown if multiple programs)
+        if multi:
+            html += '<div class="ir-program-tabs">\n'
+            for i, prog in enumerate(self.ir_programs):
+                active = " active" if i == 0 else ""
+                name = self._escape_html(prog.get("name", f"Program {i}"))
+                html += f'<button class="ir-program-tab{active}" onclick="showIRProgram({i})">{name}</button>\n'
+            html += '</div>\n'
+
+        # Per-program content
+        for i, prog in enumerate(self.ir_programs):
+            display = "" if i == 0 else " style=\"display:none;\""
+            html += f'<div id="ir-program-{i}" class="ir-program-content"{display}>\n'
+            html += '  <div class="ir-tabs">\n'
+            html += f'    <button class="ir-tab active" onclick="showIRTab(\'ttir\', {i})">TTIR</button>\n'
+            html += f'    <button class="ir-tab" onclick="showIRTab(\'ttnn\', {i})">TTNN</button>\n'
+            html += '  </div>\n'
+            html += f'  <div id="p{i}-ttir-content" class="ir-content active">\n'
+            html += self._generate_ir_html('ttir', i)
+            html += '\n  </div>\n'
+            html += f'  <div id="p{i}-ttnn-content" class="ir-content">\n'
+            html += self._generate_ir_html('ttnn', i)
+            html += '\n  </div>\n'
+            html += '</div>\n'
+
+        return html
 
     def _build_html(
         self,
@@ -193,11 +253,13 @@ class MemoryVisualizer:
             for mt, cfg in self.mem_metadata["memory_config"].items():
                 memory_config_for_js[mt] = cfg.get("num_banks", 1)
 
-        # Prepare IR location indices for JavaScript
-        ir_loc_index = {"ttir": {}, "ttnn": {}}
-        if self.ir_data:
-            ir_loc_index["ttir"] = self.ir_data.get("ttir", {}).get("loc_index", {})
-            ir_loc_index["ttnn"] = self.ir_data.get("ttnn", {}).get("loc_index", {})
+        # Prepare IR location indices for JavaScript (per-program array)
+        ir_loc_index = []
+        for prog in self.ir_programs:
+            ir_loc_index.append({
+                "ttir": prog.get("ttir", {}).get("loc_index", {}),
+                "ttnn": prog.get("ttnn", {}).get("loc_index", {}),
+            })
 
         has_ir = self._has_ir_data()
         irs_tab_style = "" if has_ir else "display: none;"
@@ -527,6 +589,35 @@ class MemoryVisualizer:
             border-radius: 10px;
             border: 1px solid var(--border-medium);
             overflow: hidden;
+        }}
+        .ir-program-tabs {{
+            display: flex;
+            background: var(--bg-canvas);
+            padding: 4px 8px;
+            gap: 4px;
+            border-bottom: 2px solid var(--border-medium);
+            flex-wrap: wrap;
+        }}
+        .ir-program-tab {{
+            padding: 8px 16px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border: 1px solid var(--border-medium);
+            border-radius: 6px 6px 0 0;
+            background: var(--bg-secondary);
+            font-size: 13px;
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            transition: all 0.2s;
+        }}
+        .ir-program-tab:hover {{
+            color: var(--text-primary);
+            background: var(--bg-tertiary);
+        }}
+        .ir-program-tab.active {{
+            color: rgba(76, 175, 80, 1);
+            background: var(--bg-primary);
+            border-bottom-color: var(--bg-primary);
         }}
         .ir-tabs {{
             display: flex;
@@ -912,16 +1003,7 @@ class MemoryVisualizer:
             <!-- IRs View -->
             <div id="irs-view" class="view">
                 <div class="ir-view-container">
-                    <div class="ir-tabs">
-                        <button class="ir-tab active" onclick="showIRTab('ttir')">TTIR</button>
-                        <button class="ir-tab" onclick="showIRTab('ttnn')">TTNN</button>
-                    </div>
-                    <div id="ttir-content" class="ir-content active">
-                        {self._generate_ir_html('ttir')}
-                    </div>
-                    <div id="ttnn-content" class="ir-content">
-                        {self._generate_ir_html('ttnn')}
-                    </div>
+                    {self._generate_ir_programs_html()}
                 </div>
             </div>
         </main>
@@ -1075,14 +1157,32 @@ class MemoryVisualizer:
             }}
         }}
 
-        // IR tab switching
-        function showIRTab(irType) {{
-            // Update tabs
-            document.querySelectorAll('.ir-tab').forEach(t => t.classList.remove('active'));
+        // IR program tab switching
+        var currentIRProgram = 0;
+        function showIRProgram(idx) {{
+            // Hide all program contents, show selected
+            document.querySelectorAll('.ir-program-content').forEach(c => c.style.display = 'none');
+            var el = document.getElementById('ir-program-' + idx);
+            if (el) el.style.display = '';
+            // Update program tab active state
+            document.querySelectorAll('.ir-program-tab').forEach(t => t.classList.remove('active'));
+            var tabs = document.querySelectorAll('.ir-program-tab');
+            if (tabs[idx]) tabs[idx].classList.add('active');
+            currentIRProgram = idx;
+        }}
+
+        // IR tab switching (within a program)
+        function showIRTab(irType, progIdx) {{
+            if (progIdx === undefined) progIdx = currentIRProgram;
+            var container = document.getElementById('ir-program-' + progIdx);
+            if (!container) return;
+            // Update tabs within this program
+            container.querySelectorAll('.ir-tab').forEach(t => t.classList.remove('active'));
             event.target.classList.add('active');
-            // Update content
-            document.querySelectorAll('.ir-content').forEach(c => c.classList.remove('active'));
-            document.getElementById(irType + '-content').classList.add('active');
+            // Update content within this program
+            container.querySelectorAll('.ir-content').forEach(c => c.classList.remove('active'));
+            var content = document.getElementById('p' + progIdx + '-' + irType + '-content');
+            if (content) content.classList.add('active');
         }}
 
         // Navigate to specific line in IR
@@ -1092,14 +1192,27 @@ class MemoryVisualizer:
                 currentHighlightedLine.classList.remove('highlighted');
             }}
 
-            // Try to find the line in preferred IR first, then fall back to other
-            let irType = preferredIR;
-            let lineNum = irLocIndex[irType][loc];
+            // Determine which program this op belongs to
+            var progIdx = 0;
+            // irLocIndex is an array of per-program indices
+            for (var p = 0; p < irLocIndex.length; p++) {{
+                if (irLocIndex[p][preferredIR] && irLocIndex[p][preferredIR][loc]) {{
+                    progIdx = p;
+                    break;
+                }}
+                var otherIR = preferredIR === 'ttnn' ? 'ttir' : 'ttnn';
+                if (irLocIndex[p][otherIR] && irLocIndex[p][otherIR][loc]) {{
+                    progIdx = p;
+                    break;
+                }}
+            }}
 
+            // Try preferred IR first, then fallback
+            var irType = preferredIR;
+            var lineNum = irLocIndex[progIdx] && irLocIndex[progIdx][irType] ? irLocIndex[progIdx][irType][loc] : null;
             if (!lineNum) {{
-                // Try the other IR type
                 irType = preferredIR === 'ttnn' ? 'ttir' : 'ttnn';
-                lineNum = irLocIndex[irType][loc];
+                lineNum = irLocIndex[progIdx] && irLocIndex[progIdx][irType] ? irLocIndex[progIdx][irType][loc] : null;
             }}
 
             if (!lineNum) {{
@@ -1113,18 +1226,26 @@ class MemoryVisualizer:
             document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
             document.querySelectorAll('.sidebar-nav a')[1].classList.add('active');
 
-            // Switch to correct IR tab
-            document.querySelectorAll('.ir-tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.ir-tab')[irType === 'ttir' ? 0 : 1].classList.add('active');
-            document.querySelectorAll('.ir-content').forEach(c => c.classList.remove('active'));
-            document.getElementById(irType + '-content').classList.add('active');
+            // Switch to correct program tab
+            showIRProgram(progIdx);
+
+            // Switch to correct IR tab within program
+            var container = document.getElementById('ir-program-' + progIdx);
+            if (container) {{
+                container.querySelectorAll('.ir-tab').forEach(t => t.classList.remove('active'));
+                var tabs = container.querySelectorAll('.ir-tab');
+                if (tabs[irType === 'ttir' ? 0 : 1]) tabs[irType === 'ttir' ? 0 : 1].classList.add('active');
+                container.querySelectorAll('.ir-content').forEach(c => c.classList.remove('active'));
+                var content = document.getElementById('p' + progIdx + '-' + irType + '-content');
+                if (content) content.classList.add('active');
+            }}
 
             // Scroll to and highlight the line
-            const lineElement = document.getElementById(irType + '-line-' + lineNum);
+            const lineElement = document.getElementById('p' + progIdx + '-' + irType + '-line-' + lineNum);
             if (lineElement) {{
-                const container = lineElement.closest('.ir-content');
-                container.scrollTop = lineElement.offsetTop - container.offsetTop - container.clientHeight / 2;
-                container.scrollLeft = 0;
+                const irContent = lineElement.closest('.ir-content');
+                irContent.scrollTop = lineElement.offsetTop - irContent.offsetTop - irContent.clientHeight / 2;
+                irContent.scrollLeft = 0;
                 lineElement.classList.add('highlighted');
                 currentHighlightedLine = lineElement;
             }}
@@ -1403,7 +1524,7 @@ class MemoryVisualizer:
             weight_op_flags.append(is_weight_op)
             for mt in display_types:
                 all_allocated[mt].append(
-                    op["memory"][mt]["totalBytesAllocatedPerBank_MB"]
+                    op.get("memory", {}).get(mt, {}).get("totalBytesAllocatedPerBank_MB", 0)
                 )
 
             # Get op name and shapes from ops_data
@@ -1440,7 +1561,7 @@ class MemoryVisualizer:
                 weight_output_shapes.append(output_shapes_list[i])
 
         capacity = {
-            mt: self.mem_data[0]["memory"][mt]["totalBytesPerBank_MB"]
+            mt: self.mem_data[0].get("memory", {}).get(mt, {}).get("totalBytesPerBank_MB", 0)
             for mt in display_types
         }
 
@@ -1577,6 +1698,34 @@ class MemoryVisualizer:
                 "font": {"color": "rgb(204, 204, 220)"},
             },
         }
+
+        # Add program boundary lines (green dashed vertical lines)
+        if len(self.programs) > 1:
+            shapes = []
+            annotations = []
+            for i, prog in enumerate(self.programs[:-1]):  # No line after last program
+                boundary_x = prog["end_op_index"] + 0.5
+                shapes.append({
+                    "type": "line",
+                    "x0": boundary_x, "x1": boundary_x,
+                    "y0": 0, "y1": 1,
+                    "yref": "paper",
+                    "line": {"color": "rgba(76, 175, 80, 0.7)", "width": 1.5, "dash": "dash"},
+                })
+                # Label with the next program's name
+                next_name = self.programs[i + 1]["name"]
+                annotations.append({
+                    "x": boundary_x,
+                    "y": 1.0, "yref": "paper",
+                    "text": next_name,
+                    "showarrow": False,
+                    "font": {"size": 10, "color": "rgba(76, 175, 80, 0.9)"},
+                    "xanchor": "left",
+                    "yanchor": "bottom",
+                    "textangle": -30,
+                })
+            layout["shapes"] = shapes
+            layout["annotations"] = annotations
 
         return {"traces": traces, "layout": layout, "trace_mem_types": trace_mem_type, "display_types": display_types}
 
@@ -1818,17 +1967,17 @@ class MemoryVisualizer:
 
         for mem_type in self.available_memory_types:
             allocated_values = [
-                op["memory"][mem_type]["totalBytesAllocatedPerBank_MB"]
+                op.get("memory", {}).get(mem_type, {}).get("totalBytesAllocatedPerBank_MB", 0)
                 for op in self.mem_data
             ]
 
             stats["memory_types"][mem_type] = {
-                "peak": max(allocated_values),
-                "min": min(allocated_values),
-                "avg": sum(allocated_values) / len(allocated_values),
-                "capacity": self.mem_data[0]["memory"][mem_type][
-                    "totalBytesPerBank_MB"
-                ],
+                "peak": max(allocated_values) if allocated_values else 0,
+                "min": min(allocated_values) if allocated_values else 0,
+                "avg": sum(allocated_values) / len(allocated_values) if allocated_values else 0,
+                "capacity": self.mem_data[0].get("memory", {}).get(mem_type, {}).get(
+                    "totalBytesPerBank_MB", 0
+                ),
             }
 
         return stats
@@ -1840,15 +1989,15 @@ class MemoryVisualizer:
         for mem_type in self.available_memory_types:
             peak_idx = max(
                 range(len(self.mem_data)),
-                key=lambda i: self.mem_data[i]["memory"][mem_type][
-                    "totalBytesAllocatedPerBank_MB"
-                ],
+                key=lambda i: self.mem_data[i].get("memory", {}).get(mem_type, {}).get(
+                    "totalBytesAllocatedPerBank_MB", 0
+                ),
             )
 
             peaks[mem_type] = {
                 "index": peak_idx,
-                "memory": self.mem_data[peak_idx]["memory"][mem_type],
-                "operation": self.ops_data[peak_idx],
+                "memory": self.mem_data[peak_idx].get("memory", {}).get(mem_type, {}),
+                "operation": self.ops_data[peak_idx] if peak_idx < len(self.ops_data) else {},
             }
 
         return peaks
@@ -1857,8 +2006,8 @@ class MemoryVisualizer:
         """Get top N operations by DRAM delta (largest DRAM increase first)"""
         ops_with_mem = []
         for i in range(len(self.mem_data)):
-            current = self.mem_data[i]["memory"]["DRAM"]["totalBytesAllocatedPerBank_MB"]
-            prev = self.mem_data[i - 1]["memory"]["DRAM"]["totalBytesAllocatedPerBank_MB"] if i > 0 else 0
+            current = self.mem_data[i].get("memory", {}).get("DRAM", {}).get("totalBytesAllocatedPerBank_MB", 0)
+            prev = self.mem_data[i - 1].get("memory", {}).get("DRAM", {}).get("totalBytesAllocatedPerBank_MB", 0) if i > 0 else 0
             delta = current - prev
             if delta > 0:
                 ops_with_mem.append({
@@ -1921,12 +2070,12 @@ class MemoryVisualizer:
         total_weight_MB = weight_bytes / (1024 * 1024)
 
         # Get DRAM capacity from first operation
-        capacity_MB = self.mem_data[0]["memory"]["DRAM"]["totalBytesPerBank_MB"]
+        capacity_MB = self.mem_data[0].get("memory", {}).get("DRAM", {}).get("totalBytesPerBank_MB", 0)
 
         # For each operation, track allocated memory
         indices = [op["index"] for op in self.mem_data]
         total_allocated = [
-            op["memory"]["DRAM"]["totalBytesAllocatedPerBank_MB"]
+            op.get("memory", {}).get("DRAM", {}).get("totalBytesAllocatedPerBank_MB", 0)
             for op in self.mem_data
         ]
 

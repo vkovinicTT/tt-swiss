@@ -9,19 +9,31 @@ Main log parser for extracting operation and memory statistics from runtime logs
 import json
 import re
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
+# Regex for multi-host rank prefix (e.g., "[1,0]<stdout>: ")
+_RANK_PREFIX_RE = re.compile(r"^\[(\d+,\d+)\]<(?:stdout|stderr)>:\s*(.*)", re.DOTALL)
+
+
+def strip_rank_prefix(line: str) -> Tuple[str, Optional[str]]:
+    """Strip multi-host rank prefix like '[1,0]<stdout>:' from a line.
+    Returns (cleaned_line, rank_id) or (line, None) if no prefix."""
+    m = _RANK_PREFIX_RE.match(line)
+    if m:
+        return m.group(2), m.group(1)
+    return line, None
 
 # Handle both package import and direct execution
 try:
-    from .inputs_registry_parser import parse_inputs_registry
-    from .ir_parser import parse_ir_modules
+    from .inputs_registry_parser import parse_inputs_registry, parse_all_inputs_registries
+    from .ir_parser import parse_ir_modules, parse_all_ir_modules
     from .memory_parser import parse_memory_stats
     from .mlir_parser import parse_mlir_operation
     from .mem_logger import log_mem
     from .streaming_reader import BufferedLineReader
 except ImportError:
-    from inputs_registry_parser import parse_inputs_registry
-    from ir_parser import parse_ir_modules
+    from inputs_registry_parser import parse_inputs_registry, parse_all_inputs_registries
+    from ir_parser import parse_ir_modules, parse_all_ir_modules
     from memory_parser import parse_memory_stats
     from mlir_parser import parse_mlir_operation
     from mem_logger import log_mem
@@ -122,20 +134,83 @@ def parse_log_file(
     # Key: SSA name (e.g., "%0"), Value: layout_info dict
     live_tensors: Dict[str, Dict] = {}
 
+    # Multi-program tracking
+    programs: List[Dict] = []
+    current_program_name = "program_0"
+    current_program_start_op = 0
+    program_counter = 0
+
+    # Multi-host rank filtering (latch to first rank seen)
+    target_rank: Optional[str] = None
+
+    # Log format detection: True once we see "Executing operation:" lines
+    has_mlir_ops = False
+
     while reader.has_lines:
-        line = reader.current_line
+        raw_line = reader.current_line
         line_num = reader.total_consumed + 1
+
+        # Strip multi-host rank prefix (e.g., "[1,0]<stdout>:")
+        cleaned_line, rank_id = strip_rank_prefix(raw_line)
+
+        # Rank filtering: latch to first rank seen, skip other ranks
+        if rank_id:
+            if target_rank is None:
+                target_rank = rank_id
+            elif rank_id != target_rank:
+                reader.advance()
+                continue
+
+        # --- Program boundary detection ---
+        # Track test names as they appear (before ops start in a program)
+        if op_index == current_program_start_op:
+            test_match = re.search(r"tests/\S+::(\w+)", cleaned_line)
+            if test_match:
+                current_program_name = test_match.group(1)
+
+        # Pytest session start
+        if "= test session starts =" in cleaned_line:
+            # Close current program if we have accumulated operations
+            if op_index > current_program_start_op:
+                programs.append({
+                    "name": current_program_name,
+                    "start_op_index": current_program_start_op,
+                    "end_op_index": op_index - 1,
+                })
+                program_counter += 1
+                current_program_start_op = op_index
+            # Reset name for this new program
+            current_program_name = f"program_{program_counter}"
+            # Reset per-program state
+            const_eval_stack.clear()
+            live_tensors.clear()
+
+        # New PJRT runtime session (non-pytest program boundary)
+        elif "ClientInstance::PJRT_Client_Create" in cleaned_line:
+            # Only close if we have ops AND no pytest session just started on this boundary
+            if op_index > current_program_start_op:
+                programs.append({
+                    "name": current_program_name,
+                    "start_op_index": current_program_start_op,
+                    "end_op_index": op_index - 1,
+                })
+                program_counter += 1
+                current_program_name = f"program_{program_counter}"
+                current_program_start_op = op_index
+                # Reset per-program state
+                const_eval_stack.clear()
+                live_tensors.clear()
 
         # Check for const_eval cache miss
         cache_miss_match = re.search(
-            r"Cache miss or invalid cache for function:\s*(\S+)", line
+            r"Cache miss or invalid cache for function:\s*(\S+)", cleaned_line
         )
         if cache_miss_match:
             func_name = cache_miss_match.group(1)
             const_eval_cache_misses.add(func_name)
 
         # Check for starting execution of a const_eval program
-        start_match = re.search(r"Starting execution of program:\s*(\S+)", line)
+        start_match = re.search(r"Starting execution of program:\s*(\S+)", cleaned_line)
         if start_match:
             program_name = start_match.group(1)
             if "const_eval" in program_name:
@@ -144,7 +219,7 @@ def parse_log_file(
                     const_eval_ops_count[program_name] = 0
 
         # Check for finishing execution of a const_eval program
-        finish_match = re.search(r"Finished execution of program:\s*(\S+)", line)
+        finish_match = re.search(r"Finished execution of program:\s*(\S+)", cleaned_line)
         if finish_match:
             program_name = finish_match.group(1)
             if (
@@ -154,9 +229,11 @@ def parse_log_file(
             ):
                 const_eval_stack.pop()
 
-        # Check for operation execution line
-        if "Executing operation:" in line and "RuntimeTTNN" in line:
-            op_info = parse_mlir_operation(line)
+        # --- Operation detection ---
+        # Primary path: standard logs with MLIR operation details
+        if "Executing operation:" in cleaned_line and "RuntimeTTNN" in cleaned_line:
+            has_mlir_ops = True
+            op_info = parse_mlir_operation(cleaned_line)
 
             if not op_info:
                 print(
@@ -190,6 +267,7 @@ def parse_log_file(
             if mem_info:
                 # Add index and cross-reference fields to both outputs
                 op_info["index"] = op_index
+                op_info["program_index"] = len(programs)
                 mem_info["index"] = op_index
                 mem_info["mlir_op"] = op_info["mlir_op"]
                 mem_info["loc"] = op_info["loc"]
@@ -240,10 +318,109 @@ def parse_log_file(
                 )
                 skipped_ops += 1
 
+        # Secondary path: memory-state-only logs (multihost) without MLIR op details
+        elif not has_mlir_ops and "Device memory state before operation" in cleaned_line:
+            # Build 5-line block: header + 4 memory type lines
+            # Peek extra lines to handle noise/interleaving between memory lines
+            raw_lookahead = reader.peek_slice(1, 8)
+            cleaned_block = [cleaned_line]
+            lines_consumed = 0
+            for raw in raw_lookahead:
+                stripped, r = strip_rank_prefix(raw)
+                # Skip lines from other ranks
+                if r and target_rank and r != target_rank:
+                    lines_consumed += 1
+                    continue
+                # Only include memory state lines
+                if "Device" in stripped and "memory state:" in stripped:
+                    cleaned_block.append(stripped)
+                    lines_consumed += 1
+                    if len(cleaned_block) >= 5:
+                        break
+                else:
+                    # Non-memory line = end of this block
+                    break
+
+            mem_info = parse_memory_stats(cleaned_block, 0)
+            if mem_info:
+                op_type = mem_info.get("op_type", "")
+
+                # Skip GetDeviceOp and DeallocateOp in secondary path
+                if op_type in ("GetDeviceOp", "DeallocateOp"):
+                    if op_type == "GetDeviceOp":
+                        get_device_count += 1
+                    else:
+                        deallocate_count += 1
+                    for _ in range(lines_consumed):
+                        reader.advance()
+                    reader.advance()
+                    continue
+
+                # Skip ops with incomplete memory data (missing DRAM)
+                if "DRAM" not in mem_info.get("memory", {}):
+                    skipped_ops += 1
+                    for _ in range(lines_consumed):
+                        reader.advance()
+                    reader.advance()
+                    continue
+
+                # Build minimal op_info (no MLIR details available)
+                op_info = {
+                    "result": None,
+                    "mlir_op": mem_info.get("op_type", "unknown"),
+                    "inputs": [],
+                    "attributes": None,
+                    "input_shapes": [],
+                    "input_dtypes": [],
+                    "output_shapes": [],
+                    "output_dtypes": [],
+                    "output_layout_info": None,
+                    "loc": None,
+                    "index": op_index,
+                    "program_index": len(programs),
+                    "const_eval_graph": None,
+                    "const_eval_cache_miss": False,
+                    "is_weight_op": False,
+                    "weights": [],
+                }
+                if rank_id:
+                    op_info["rank"] = rank_id
+
+                mem_info["index"] = op_index
+                mem_info["mlir_op"] = op_info["mlir_op"]
+                mem_info["loc"] = None
+                mem_info["const_eval_graph"] = None
+                mem_info["const_eval_cache_miss"] = False
+                mem_info["is_weight_op"] = False
+                mem_info["unpadded_memory"] = calculate_unpadded_memory_state(live_tensors)
+
+                operations.append(op_info)
+                memory_stats.append(mem_info)
+                op_index += 1
+
+                # Advance past the consumed lookahead lines
+                for _ in range(lines_consumed):
+                    reader.advance()
+
         reader.advance()
 
     total_lines = reader.total_consumed
     reader.close()
+
+    # Close the final program
+    if op_index > current_program_start_op:
+        programs.append({
+            "name": current_program_name,
+            "start_op_index": current_program_start_op,
+            "end_op_index": op_index - 1,
+        })
+    # If no boundaries were detected, wrap everything in one program
+    if not programs and op_index > 0:
+        programs.append({
+            "name": "main",
+            "start_op_index": 0,
+            "end_op_index": op_index - 1,
+        })
 
     log_mem("parse_log_file: main loop done")
 
@@ -405,6 +582,7 @@ def parse_log_file(
             "metadata": {
                 "memory_config": memory_config,
                 "total_operations": len(memory_stats),
+                "programs": programs,
             },
             "operations": memory_stats,
         }
@@ -433,7 +611,20 @@ def parse_log_file(
     # Parse and write IR modules if requested
     if ir_output:
         try:
-            ir_data = parse_ir_modules(log_path)
+            if len(programs) > 1:
+                # Multi-program: collect all IR module pairs
+                all_ir = parse_all_ir_modules(log_path)
+                ir_data = {
+                    "programs": [
+                        {
+                            "name": programs[i]["name"] if i < len(programs) else f"program_{i}",
+                            **(all_ir[i] if i < len(all_ir) else {"ttir": {"text": "", "loc_index": {}}, "ttnn": {"text": "", "loc_index": {}}}),
+                        }
+                        for i in range(max(len(programs), len(all_ir)))
+                    ]
+                }
+            else:
+                ir_data = parse_ir_modules(log_path)
             with open(ir_output, "w", encoding="utf-8") as f:
                 json.dump(ir_data, f, indent=2)
             print(f"IR modules written to: {ir_output}")
@@ -450,6 +641,13 @@ def parse_log_file(
     print(f"  Get_device operations excluded: {get_device_count}")
     print(f"  Operations skipped (no memory stats): {skipped_ops}")
     print(f"  Total log lines processed: {total_lines}")
+    if target_rank:
+        print(f"  Multi-host rank used: [{target_rank}]")
+    if len(programs) > 1:
+        print(f"\nProgram Boundaries ({len(programs)} programs detected):")
+        for i, prog in enumerate(programs):
+            n_ops = prog["end_op_index"] - prog["start_op_index"] + 1
+            print(f"  [{i}] {prog['name']}: ops {prog['start_op_index']}-{prog['end_op_index']} ({n_ops} ops)")
 
     if const_eval_ops_count:
         print(f"\nConst Eval Summary:")
@@ -544,6 +742,8 @@ def validate_log_content(log_path: str) -> Optional[str]:
     """
     Fast-scan a log file for required data markers.
     Returns None if valid, or a diagnostic message string if incomplete.
+    Accepts both standard logs (Executing operation + memory states)
+    and multihost logs (memory states only).
     """
     has_operations = False
     has_memory_states = False
@@ -555,7 +755,8 @@ def validate_log_content(log_path: str) -> Optional[str]:
                     has_operations = True
                 if not has_memory_states and "Device memory state before operation" in line:
                     has_memory_states = True
-                if has_operations and has_memory_states:
+                # Valid if we have memory states (with or without MLIR op lines)
+                if has_memory_states:
                     return None
     except Exception as e:
         return f"Error reading log file: {e}"

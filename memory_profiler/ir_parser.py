@@ -184,6 +184,82 @@ def _stream_extract_ir_sections(log_path: str) -> Dict[str, List[str]]:
     return sections
 
 
+def _stream_extract_all_ir_sections(log_path: str) -> List[Dict[str, List[str]]]:
+    """
+    Stream through a log file and extract ALL TTIR and TTNN module sections.
+    Returns a list of paired sections: [{"ttir": [lines], "ttnn": [lines]}, ...].
+    Sections are paired sequentially (Nth ttir with Nth ttnn).
+    """
+    ttir_sections: List[List[str]] = []
+    ttnn_sections: List[List[str]] = []
+    current_type: Optional[str] = None
+    current_lines: List[str] = []
+
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if current_type is None:
+                for mod_type in ("ttir", "ttnn"):
+                    if f"MLIR Module {mod_type}:" in line:
+                        current_type = mod_type
+                        current_lines = [line]
+                        break
+            else:
+                current_lines.append(line)
+                if "END OF MLIR MODULE" in line:
+                    if current_type == "ttir":
+                        ttir_sections.append(current_lines)
+                    else:
+                        ttnn_sections.append(current_lines)
+                    current_type = None
+                    current_lines = []
+
+    # Pair them: Nth ttir with Nth ttnn
+    result = []
+    n = max(len(ttir_sections), len(ttnn_sections))
+    for i in range(n):
+        pair: Dict[str, List[str]] = {}
+        if i < len(ttir_sections):
+            pair["ttir"] = ttir_sections[i]
+        if i < len(ttnn_sections):
+            pair["ttnn"] = ttnn_sections[i]
+        result.append(pair)
+    return result
+
+
+def _process_ir_section(section_lines: List[str]) -> Dict:
+    """Process a single IR section into text + loc_index."""
+    text = extract_module_text(section_lines, 0, len(section_lines) - 1)
+    loc_index = build_loc_line_index(text)
+    return {"text": text, "loc_index": loc_index}
+
+
+def parse_all_ir_modules(log_path: str) -> List[Dict]:
+    """
+    Parse ALL IR module pairs from a log file (multi-program support).
+
+    Returns:
+        List of dicts, each with "ttir" and "ttnn" keys containing
+        {"text": str, "loc_index": dict}.
+    """
+    log_mem("parse_all_ir_modules: start")
+    try:
+        all_sections = _stream_extract_all_ir_sections(log_path)
+    except Exception as e:
+        print(f"Error reading IR sections: {e}", file=sys.stderr)
+        return []
+
+    result = []
+    empty = {"text": "", "loc_index": {}}
+    for pair in all_sections:
+        entry = {
+            "ttir": _process_ir_section(pair["ttir"]) if "ttir" in pair else dict(empty),
+            "ttnn": _process_ir_section(pair["ttnn"]) if "ttnn" in pair else dict(empty),
+        }
+        result.append(entry)
+    log_mem("parse_all_ir_modules: done")
+    return result
+
+
 def parse_ir_modules(log_path: str) -> Dict:
     """
     Parse IR modules from a log file.
