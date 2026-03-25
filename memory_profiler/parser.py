@@ -28,14 +28,14 @@ try:
     from .inputs_registry_parser import parse_inputs_registry, parse_all_inputs_registries
     from .ir_parser import parse_ir_modules, parse_all_ir_modules
     from .memory_parser import parse_memory_stats
-    from .mlir_parser import parse_mlir_operation
+    from .mlir_parser import parse_mlir_operation, extract_ir_op_sequence
     from .mem_logger import log_mem
     from .streaming_reader import BufferedLineReader
 except ImportError:
     from inputs_registry_parser import parse_inputs_registry, parse_all_inputs_registries
     from ir_parser import parse_ir_modules, parse_all_ir_modules
     from memory_parser import parse_memory_stats
-    from mlir_parser import parse_mlir_operation
+    from mlir_parser import parse_mlir_operation, extract_ir_op_sequence
     from mem_logger import log_mem
     from streaming_reader import BufferedLineReader
 
@@ -86,6 +86,96 @@ def calculate_unpadded_memory_state(live_tensors: Dict[str, Dict]) -> Dict:
         )
 
     return result
+
+
+def _backfill_tile_padding_from_ir(
+    operations: List[Dict],
+    memory_stats: List[Dict],
+    log_path: str,
+    programs: List[Dict],
+) -> None:
+    """
+    Backfill output_layout_info and unpadded_memory on secondary-path ops
+    by extracting layout data from TTNN IR modules in the same log file.
+
+    TTNN IR ops are high-level and compile to many device operations, so the
+    count of IR ops is typically much smaller than runtime ops. We handle this
+    by greedily assigning IR modules to programs, then mapping IR snapshots to
+    runtime ops proportionally within each program.
+    """
+    all_ir = parse_all_ir_modules(log_path)
+    if not all_ir:
+        return
+
+    # Step 1: Build per-module IR snapshots (layout + live tensor state)
+    module_snapshots: List[List[Dict]] = []
+    for ir_pair in all_ir:
+        ttnn_text = ir_pair.get("ttnn", {}).get("text", "")
+        if not ttnn_text:
+            continue
+
+        ir_ops = extract_ir_op_sequence(ttnn_text)
+        live_tensors: Dict[str, Dict] = {}
+        snapshots: List[Dict] = []
+
+        for ir_op in ir_ops:
+            if ir_op["is_get_device"]:
+                continue
+            if ir_op["is_deallocate"]:
+                live_tensors.pop(ir_op["deallocated_ssa"], None)
+                continue
+
+            layout = ir_op["output_layout_info"]
+            if layout and ir_op["ssa"]:
+                if layout.get("buffer_type") in ("dram", "l1"):
+                    live_tensors[ir_op["ssa"]] = layout
+
+            snapshots.append({
+                "output_layout_info": layout,
+                "unpadded_memory": calculate_unpadded_memory_state(
+                    dict(live_tensors)
+                ),
+            })
+        module_snapshots.append(snapshots)
+
+    if not module_snapshots:
+        return
+
+    # Step 2: Greedily assign modules to programs by IR op count
+    program_snapshots: List[List[Dict]] = []
+    mod_idx = 0
+    for prog in programs:
+        prog_n_ops = prog["end_op_index"] - prog["start_op_index"] + 1
+        prog_snaps: List[Dict] = []
+        while mod_idx < len(module_snapshots):
+            prog_snaps.extend(module_snapshots[mod_idx])
+            mod_idx += 1
+            if len(prog_snaps) >= prog_n_ops:
+                break
+        program_snapshots.append(prog_snaps)
+
+    # Step 3: Map IR snapshots to runtime ops proportionally per program
+    for prog_idx, prog in enumerate(programs):
+        if prog_idx >= len(program_snapshots):
+            break
+        snaps = program_snapshots[prog_idx]
+        if not snaps:
+            continue
+
+        start = prog["start_op_index"]
+        prog_n_ops = prog["end_op_index"] - start + 1
+        n_snaps = len(snaps)
+
+        for i in range(prog_n_ops):
+            snap_idx = min(i * n_snaps // prog_n_ops, n_snaps - 1)
+            rt_idx = start + i
+            if rt_idx < len(operations):
+                operations[rt_idx]["output_layout_info"] = snaps[snap_idx][
+                    "output_layout_info"
+                ]
+                memory_stats[rt_idx]["unpadded_memory"] = snaps[snap_idx][
+                    "unpadded_memory"
+                ]
 
 
 def parse_log_file(
@@ -423,6 +513,11 @@ def parse_log_file(
         })
 
     log_mem("parse_log_file: main loop done")
+
+    # Backfill tile padding data from IR for secondary-path logs
+    if not has_mlir_ops and operations:
+        _backfill_tile_padding_from_ir(operations, memory_stats, log_path, programs)
+        log_mem("parse_log_file: IR tile padding backfill done")
 
     # Parse inputs registry from MLIR module
     registry = None

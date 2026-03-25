@@ -33,9 +33,8 @@ class TestVaeTilePadding:
 
 
 class TestMultihostTilePadding:
-    @pytest.mark.xfail(reason="Secondary path lacks MLIR op details for tile padding")
     def test_unpadded_memory_nonzero(self, parsed_multihost):
-        """Multihost secondary path currently produces flat tile padding data."""
+        """Multihost should have non-zero tile padding data (backfilled from IR)."""
         nonzero_count = 0
         for op in parsed_multihost["mem"]["operations"]:
             unpadded = op.get("unpadded_memory", {})
@@ -43,9 +42,11 @@ class TestMultihostTilePadding:
                 if unpadded.get(mt, {}).get("padded_bytes", 0) > 0:
                     nonzero_count += 1
                     break
-        assert nonzero_count > 0, "Tile padding data is all zeros (known limitation)"
+        assert nonzero_count > 0, "Tile padding data is all zeros"
 
-    def test_output_layout_info_absent(self, parsed_multihost):
-        """Secondary path ops should NOT have output_layout_info."""
-        for op in parsed_multihost["ops"]:
-            assert op.get("output_layout_info") is None
+    def test_output_layout_info_present(self, parsed_multihost):
+        """Secondary path ops should have output_layout_info (backfilled from IR)."""
+        with_layout = sum(
+            1 for op in parsed_multihost["ops"] if op.get("output_layout_info")
+        )
+        assert with_layout > 0, f"Expected some ops with layout info, got {with_layout}"
