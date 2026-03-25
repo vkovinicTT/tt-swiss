@@ -2316,6 +2316,33 @@ class MemoryVisualizer:
             },
         }
 
+        # Add program boundary lines (green dashed vertical lines)
+        if len(self.programs) > 1:
+            shapes = []
+            annotations = []
+            for i, prog in enumerate(self.programs[:-1]):
+                boundary_x = prog["end_op_index"] + 0.5
+                shapes.append({
+                    "type": "line",
+                    "x0": boundary_x, "x1": boundary_x,
+                    "y0": 0, "y1": 1,
+                    "yref": "paper",
+                    "line": {"color": "rgba(76, 175, 80, 0.7)", "width": 1.5, "dash": "dash"},
+                })
+                next_name = self.programs[i + 1]["name"]
+                annotations.append({
+                    "x": boundary_x,
+                    "y": 1.0, "yref": "paper",
+                    "text": next_name,
+                    "showarrow": False,
+                    "font": {"size": 10, "color": "rgba(76, 175, 80, 0.9)"},
+                    "xanchor": "left",
+                    "yanchor": "bottom",
+                    "textangle": -30,
+                })
+            layout["shapes"] = shapes
+            layout["annotations"] = annotations
+
         return {"traces": traces, "layout": layout}
 
     def _calculate_peak_padding_overhead(self) -> Dict:
