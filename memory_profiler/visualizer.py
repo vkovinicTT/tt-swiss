@@ -1387,9 +1387,19 @@ class MemoryVisualizer:
 
             document.getElementById('op-popup-body').innerHTML = html;
 
-            // IR button
+            // IR button — irLocIndex is a per-program array, not a flat dict
             const irBtn = document.getElementById('op-popup-ir-btn');
-            if (hasIRData && popupCurrentLoc && (irLocIndex.ttnn[popupCurrentLoc] || irLocIndex.ttir[popupCurrentLoc])) {{
+            var irFound = false;
+            if (hasIRData && popupCurrentLoc) {{
+                for (var p = 0; p < irLocIndex.length; p++) {{
+                    if ((irLocIndex[p].ttnn && irLocIndex[p].ttnn[popupCurrentLoc]) ||
+                        (irLocIndex[p].ttir && irLocIndex[p].ttir[popupCurrentLoc])) {{
+                        irFound = true;
+                        break;
+                    }}
+                }}
+            }}
+            if (irFound) {{
                 irBtn.disabled = false;
                 irBtn.title = '';
             }} else {{

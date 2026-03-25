@@ -88,6 +88,92 @@ def calculate_unpadded_memory_state(live_tensors: Dict[str, Dict]) -> Dict:
     return result
 
 
+def _group_ir_modules_by_program(
+    all_ir: List[Dict],
+    programs: List[Dict],
+) -> List[Dict]:
+    """
+    Group IR module pairs into programs using greedy assignment, then merge
+    text and loc_index for modules assigned to the same program.
+
+    Uses the same greedy logic as _backfill_tile_padding_from_ir: consume
+    modules until the IR op count meets or exceeds the program's runtime
+    op count.
+    """
+    if not all_ir:
+        return [
+            {
+                "name": p["name"],
+                "ttir": {"text": "", "loc_index": {}},
+                "ttnn": {"text": "", "loc_index": {}},
+            }
+            for p in programs
+        ]
+
+    # Count emitted IR ops per module (non-get_device, non-deallocate)
+    module_op_counts = []
+    for ir_pair in all_ir:
+        ttnn_text = ir_pair.get("ttnn", {}).get("text", "")
+        if ttnn_text:
+            ir_ops = extract_ir_op_sequence(ttnn_text)
+            count = sum(
+                1
+                for op in ir_ops
+                if not op["is_get_device"] and not op["is_deallocate"]
+            )
+        else:
+            count = 0
+        module_op_counts.append(count)
+
+    # Greedily assign modules to programs
+    program_modules: List[List[int]] = []
+    mod_idx = 0
+    for prog in programs:
+        prog_n_ops = prog["end_op_index"] - prog["start_op_index"] + 1
+        assigned = []
+        ir_count = 0
+        while mod_idx < len(all_ir):
+            assigned.append(mod_idx)
+            ir_count += module_op_counts[mod_idx]
+            mod_idx += 1
+            if ir_count >= prog_n_ops:
+                break
+        program_modules.append(assigned)
+
+    # Merge modules per program
+    result = []
+    for prog_idx, prog in enumerate(programs):
+        mod_indices = program_modules[prog_idx] if prog_idx < len(program_modules) else []
+
+        merged = {"name": prog["name"]}
+        for ir_type in ("ttir", "ttnn"):
+            texts = []
+            merged_loc = {}
+            cumulative_lines = 0
+
+            for mi in mod_indices:
+                ir_data = all_ir[mi].get(ir_type, {})
+                text = ir_data.get("text", "")
+                loc_index = ir_data.get("loc_index", {})
+
+                if text:
+                    texts.append(text)
+                    # Offset line numbers by cumulative line count
+                    for loc_name, line_num in loc_index.items():
+                        if loc_name not in merged_loc:
+                            merged_loc[loc_name] = line_num + cumulative_lines
+                    cumulative_lines += len(text.split("\n"))
+
+            merged[ir_type] = {
+                "text": "\n\n".join(texts),
+                "loc_index": merged_loc,
+            }
+
+        result.append(merged)
+
+    return result
+
+
 def _backfill_tile_padding_from_ir(
     operations: List[Dict],
     memory_stats: List[Dict],
@@ -135,6 +221,7 @@ def _backfill_tile_padding_from_ir(
                 "unpadded_memory": calculate_unpadded_memory_state(
                     dict(live_tensors)
                 ),
+                "loc": ir_op["loc"],
             })
         module_snapshots.append(snapshots)
 
@@ -176,6 +263,9 @@ def _backfill_tile_padding_from_ir(
                 memory_stats[rt_idx]["unpadded_memory"] = snaps[snap_idx][
                     "unpadded_memory"
                 ]
+                if snaps[snap_idx].get("loc"):
+                    operations[rt_idx]["loc"] = snaps[snap_idx]["loc"]
+                    memory_stats[rt_idx]["loc"] = snaps[snap_idx]["loc"]
 
 
 def parse_log_file(
@@ -707,16 +797,11 @@ def parse_log_file(
     if ir_output:
         try:
             if len(programs) > 1:
-                # Multi-program: collect all IR module pairs
+                # Multi-program: group IR modules into programs using
+                # greedy assignment (matches _backfill_tile_padding_from_ir)
                 all_ir = parse_all_ir_modules(log_path)
                 ir_data = {
-                    "programs": [
-                        {
-                            "name": programs[i]["name"] if i < len(programs) else f"program_{i}",
-                            **(all_ir[i] if i < len(all_ir) else {"ttir": {"text": "", "loc_index": {}}, "ttnn": {"text": "", "loc_index": {}}}),
-                        }
-                        for i in range(max(len(programs), len(all_ir)))
-                    ]
+                    "programs": _group_ir_modules_by_program(all_ir, programs)
                 }
             else:
                 ir_data = parse_ir_modules(log_path)

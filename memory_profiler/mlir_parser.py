@@ -385,12 +385,18 @@ def extract_ir_op_sequence(ttnn_text: str) -> List[Dict]:
     # --- Pass 1: collect aliases ---
     layout_aliases = {}   # "#ttnn_layout1" -> "#ttnn.ttnn_layout<...>"
     buffer_aliases = {}   # "#dram" -> "#ttnn.buffer_type<dram>"
+    loc_aliases = {}      # "#loc3" -> "add.12"
 
     layout_re = re.compile(r'^(#ttnn_layout\w*)\s*=\s*(#ttnn\.ttnn_layout<.+>)\s*$')
     buffer_re = re.compile(r'^(#\w+)\s*=\s*(#ttnn\.buffer_type<\w+>)\s*$')
+    loc_alias_re = re.compile(r'^(#loc\d*)\s*=\s*loc\("([^"]+)"')
 
     for line in lines:
         stripped = line.strip()
+        # Check loc aliases (e.g., #loc3 = loc("add.12"))
+        lm = loc_alias_re.match(stripped)
+        if lm:
+            loc_aliases[lm.group(1)] = lm.group(2)
         m = layout_re.match(stripped)
         if m:
             layout_aliases[m.group(1)] = m.group(2)
@@ -415,6 +421,16 @@ def extract_ir_op_sequence(ttnn_text: str) -> List[Dict]:
             s = s.replace(alias, expansion)
         return s
 
+    def resolve_loc(line_str: str) -> Optional[str]:
+        """Extract MLIR location name, resolving aliases like loc(#loc3)."""
+        # Try alias form: loc(#locN)
+        m = re.search(r'loc\((#loc\d*)\)', line_str)
+        if m:
+            return loc_aliases.get(m.group(1))
+        # Try inline form: loc("name")
+        m = re.search(r'loc\("([^"]+)"', line_str)
+        return m.group(1) if m else None
+
     # --- Pass 2: walk operations ---
     # Op with SSA result: %N = "ttnn.xxx"(inputs) ...
     op_re = re.compile(r'(%\d+)\s*=\s*"ttnn\.(\w+)"\(([^)]*)\)')
@@ -436,6 +452,7 @@ def extract_ir_op_sequence(ttnn_text: str) -> List[Dict]:
                 "is_deallocate": True,
                 "is_get_device": False,
                 "deallocated_ssa": dm.group(1),
+                "loc": resolve_loc(stripped),
             })
             continue
 
@@ -458,6 +475,7 @@ def extract_ir_op_sequence(ttnn_text: str) -> List[Dict]:
                 "is_deallocate": False,
                 "is_get_device": True,
                 "deallocated_ssa": None,
+                "loc": None,
             })
             continue
 
@@ -480,6 +498,7 @@ def extract_ir_op_sequence(ttnn_text: str) -> List[Dict]:
             "is_deallocate": False,
             "is_get_device": False,
             "deallocated_ssa": None,
+            "loc": resolve_loc(stripped),
         })
 
     return result
