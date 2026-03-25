@@ -1424,7 +1424,7 @@ class MemoryVisualizer:
         // Initialize plots
         document.addEventListener('DOMContentLoaded', function() {{
             // Create memory usage over time graphs
-            Plotly.newPlot('memory-graphs', memoryData.traces, memoryData.layout, {{responsive: true}});
+            Plotly.newPlot('memory-graphs', memoryData.traces, memoryData.layout, {{responsive: true, scrollZoom: true, doubleClick: false}});
 
             // Save original per-bank Y data and hover templates for memory graph
             var mgEl = document.getElementById('memory-graphs');
@@ -1452,7 +1452,7 @@ class MemoryVisualizer:
 
             // Create unpadded comparison graph if data available
             if (unpaddedComparisonData && unpaddedComparisonData.traces && unpaddedComparisonData.traces.length > 0) {{
-                Plotly.newPlot('unpadded-comparison-graph', unpaddedComparisonData.traces, unpaddedComparisonData.layout, {{responsive: true}});
+                Plotly.newPlot('unpadded-comparison-graph', unpaddedComparisonData.traces, unpaddedComparisonData.layout, {{responsive: true, scrollZoom: true, doubleClick: false}});
 
                 // Save original per-bank Y data and hover templates
                 var upEl = document.getElementById('unpadded-comparison-graph');
@@ -1648,6 +1648,7 @@ class MemoryVisualizer:
         layout = {
             "height": 520,
             "margin": {"t": 120},
+            "dragmode": "pan",
             "showlegend": True,
             "paper_bgcolor": "transparent",
             "plot_bgcolor": "transparent",
@@ -2288,6 +2289,7 @@ class MemoryVisualizer:
 
         layout = {
             "height": 400,
+            "dragmode": "pan",
             "showlegend": True,
             "paper_bgcolor": "transparent",
             "plot_bgcolor": "transparent",
