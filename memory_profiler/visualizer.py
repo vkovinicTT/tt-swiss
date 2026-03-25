@@ -1646,7 +1646,8 @@ class MemoryVisualizer:
             )
 
         layout = {
-            "height": 450,
+            "height": 520,
+            "margin": {"t": 120},
             "showlegend": True,
             "paper_bgcolor": "transparent",
             "plot_bgcolor": "transparent",
@@ -1675,7 +1676,7 @@ class MemoryVisualizer:
                     "active": 0,  # DRAM is default
                     "x": 0.0,
                     "xanchor": "left",
-                    "y": 1.15,
+                    "y": 1.27,
                     "yanchor": "top",
                     "buttons": buttons,
                     "showactive": True,
@@ -1687,7 +1688,7 @@ class MemoryVisualizer:
             "legend": {
                 "orientation": "h",
                 "yanchor": "bottom",
-                "y": 1.02,
+                "y": 1.13,
                 "xanchor": "right",
                 "x": 1,
                 "font": {"color": "rgb(204, 204, 220)"},
