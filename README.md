@@ -70,6 +70,15 @@ pip install -e .
 
 ## Memory profiler
 
+### Browser usage
+No need to install anything. Just do 
+1. Check if you have debug build of tt-xla: `grep CMAKE_BUILD_TYPE build/CMakeCache.txt`. If not, rebuild in debug
+2. Turn on these enviroment variables when running your python script: `TTMLIR_RUNTIME_LOGGER_LEVEL=DEBUG TT_RUNTIME_MEMORY_LOG_LEVEL=operation`
+3. Upload your logs to http://yyz2-forge-dash.local.tenstorrent.com:9000/
+
+
+
+
 ### Usage
 
 #### Try It with Example Logs
