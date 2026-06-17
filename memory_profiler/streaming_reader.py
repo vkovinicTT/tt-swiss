@@ -10,8 +10,24 @@ streams lines from the file while maintaining a small look-ahead buffer
 for parsers that need to peek at upcoming lines.
 """
 
+import re
 from collections import deque
 from typing import List, Optional
+
+# Pattern for multi-device/process prefixes like "[1,1]<stdout>:   "
+# Matches: optional whitespace, [digits,digits,...], <stream_name>, colon, whitespace
+_DEVICE_PREFIX_RE = re.compile(r"^\s*\[\d+(?:,\d+)*\]<[^>]+>:\s*")
+
+
+def strip_log_prefix(line: str) -> str:
+    """
+    Strip known log line prefixes prepended by job runners or multi-device setups.
+
+    Handles patterns like:
+        [1,1]<stdout>:          Always |    INFO | Device memory state...
+    ->  Always |    INFO | Device memory state...
+    """
+    return _DEVICE_PREFIX_RE.sub("", line)
 
 
 class BufferedLineReader:
@@ -38,7 +54,7 @@ class BufferedLineReader:
         while len(self._buffer) < self._buffer_size and not self._exhausted:
             line = self._file.readline()
             if line:
-                self._buffer.append(line)
+                self._buffer.append(strip_log_prefix(line))
             else:
                 self._exhausted = True
                 break

@@ -30,14 +30,14 @@ try:
     from .memory_parser import parse_memory_stats
     from .mlir_parser import parse_mlir_operation, extract_ir_op_sequence
     from .mem_logger import log_mem
-    from .streaming_reader import BufferedLineReader
+    from .streaming_reader import BufferedLineReader, strip_log_prefix
 except ImportError:
     from inputs_registry_parser import parse_inputs_registry, parse_all_inputs_registries
     from ir_parser import parse_ir_modules, parse_all_ir_modules
     from memory_parser import parse_memory_stats
     from mlir_parser import parse_mlir_operation, extract_ir_op_sequence
     from mem_logger import log_mem
-    from streaming_reader import BufferedLineReader
+    from streaming_reader import BufferedLineReader, strip_log_prefix
 
 
 def calculate_unpadded_memory_state(live_tensors: Dict[str, Dict]) -> Dict:
@@ -930,7 +930,8 @@ def validate_log_content(log_path: str) -> Optional[str]:
 
     try:
         with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
+            for raw_line in f:
+                line = strip_log_prefix(raw_line)
                 if not has_operations and "Executing operation:" in line and "RuntimeTTNN" in line:
                     has_operations = True
                 if not has_memory_states and "Device memory state before operation" in line:
